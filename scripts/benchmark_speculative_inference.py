@@ -132,58 +132,47 @@ test.cuda()
 print("Speculator ready!")
 
 torch.cuda.empty_cache()
-bsize = args.bsize
+k = 5
 steps = {}
 outs = []
-for k in [2, 4, 8]:
-    steps[k] = []
+for bsize in [1, 2, 4, 8]:
+    steps[bsize] = []
     alltimes = {}
     for j in range(5): #len(data) // bsize):
         seqs = data[j * bsize : j * bsize + bsize]
         max_seq = max(len(line) for line in seqs)
         inp = [torch.IntTensor(line).cuda() for line in seqs]
         with torch.no_grad():
+            start_time = time.time()
+            out, nsteps, generation_time, times = speculative_generate(
+                model,
+                inp,
+                test,
+                new_tokens=100,
+                max_seq_len=4096,
+                top_k=k,
+                kv_cache_manager=kv_cache,
+            )
+        end_time = time.time()
+        total_time = end_time - start_time
+        # if k == 5:
+        #     outs += [line.squeeze().tolist() for line in out]
 
-            if k == 0:
-                inp = torch.stack([pad_prompt(t, max_seq) for t in inp], dim=0)
-                start_time = time.time()
-                out, nsteps, generation_time = generate(
-                    model,
-                    inp,
-                    max_new_tokens=100,
-                    max_seq_len=4096,
-                    do_sample=False,
-                    use_cache=True,
-                    kv_cache_manager=kv_cache,
-                )
-            else:
-                start_time = time.time()
-                out, nsteps, generation_time, times = speculative_generate(
-                    model,
-                    inp,
-                    test,
-                    new_tokens=100,
-                    max_seq_len=4096,
-                    top_k=k,
-                    kv_cache_manager=kv_cache,
-                )
-            end_time = time.time()
-            total_time = end_time - start_time
-        if k == 5:
-            outs += [line.squeeze().tolist() for line in out]
-
-        for i in range(bsize):
-            num_generated = len(out[i]) - len(inp[i])
-            # print(f"Ex {j*bsize+i}, topk={k}: {num_generated} tokens in {nsteps} steps.")
-            # print(f"--- avg per token: {total_time / len(out[i])}, avg per new token: {generation_time / num_generated}")
-            steps[k].append([nsteps * 100 / num_generated, total_time / len(out[i]), generation_time / num_generated])
+        # for i in range(bsize):
+        #     num_generated = len(out[i]) - len(inp[i])
+        #     # print(f"Ex {j*bsize+i}, topk={k}: {num_generated} tokens in {nsteps} steps.")
+        #     # print(f"--- avg per token: {total_time / len(out[i])}, avg per new token: {generation_time / num_generated}")
+        #     steps[k].append([nsteps * 100 / num_generated, total_time / len(out[i]), generation_time / num_generated])
         
         for field in times:
             if field not in alltimes:
                 alltimes[field] = 0
             else:
                 alltimes[field] += times[field]
-    print(alltimes)
+    print("bsize =",bsize)
+    for field in alltimes:
+        print(field, alltimes[field])
+    print()
 
-if len(args.output_path) > 0:
-    torch.save(steps, os.path.join(args.output_path, "steps_for_100_at_k.pth"))
+# if len(args.output_path) > 0:
+#     torch.save(steps, os.path.join(args.output_path, "steps_for_100_at_k.pth"))
