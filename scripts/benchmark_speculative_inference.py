@@ -138,7 +138,7 @@ outs = []
 for k in [1, 2, 4]:
     steps[bsize] = []
     alltimes = {}
-    for j in range(5): #len(data) // bsize):
+    for j in range(20): #len(data) // bsize):
         seqs = data[j * bsize : j * bsize + bsize]
         max_seq = max(len(line) for line in seqs)
         inp = [torch.IntTensor(line).cuda() for line in seqs]
@@ -171,7 +171,7 @@ for k in [1, 2, 4]:
                 alltimes[field] += times[field]
     print("k =",k)
     for field in alltimes:
-        print(field, alltimes[field])
+        print(field, ":.2f".format(alltimes[field]))
     print()
 
 # if len(args.output_path) > 0:
