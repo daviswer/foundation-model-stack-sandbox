@@ -132,10 +132,10 @@ test.cuda()
 print("Speculator ready!")
 
 torch.cuda.empty_cache()
-k = 5
+bsize = 5
 steps = {}
 outs = []
-for bsize in [1, 2, 4, 8]:
+for k in [1, 2, 4]:
     steps[bsize] = []
     alltimes = {}
     for j in range(5): #len(data) // bsize):
@@ -169,7 +169,7 @@ for bsize in [1, 2, 4, 8]:
                 alltimes[field] = 0
             else:
                 alltimes[field] += times[field]
-    print("bsize =",bsize)
+    print("k =",k)
     for field in alltimes:
         print(field, alltimes[field])
     print()
