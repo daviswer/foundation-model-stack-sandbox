@@ -171,7 +171,7 @@ for k in [1, 2, 4]:
                 alltimes[field] += times[field]
     print("k =",k)
     for field in alltimes:
-        print(field, ":.2f".format(alltimes[field]))
+        print(field, "{:.2f}".format(alltimes[field]))
     print()
 
 # if len(args.output_path) > 0:
