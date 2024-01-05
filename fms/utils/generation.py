@@ -175,7 +175,7 @@ def generate(
         kv_cache_manager.free_sequences(sequence_ids)  # type: ignore
 
     end_time = time.time()
-    return result, max_new_tokens, (end_time - start_time)
+    return result, max_new_tokens, (end_time - start_time), {}
 
 
 def truncate_after_eos(result, eos_token_id):
@@ -194,7 +194,7 @@ def truncate_after_eos(result, eos_token_id):
         result = result[: eos_idx + 1]
     return result
 
-
+ 
 def speculative_generate(
     model: Union[Callable, torch.nn.Module],
     input_ids: Union[torch.Tensor, List[torch.Tensor]],
@@ -295,10 +295,16 @@ def speculative_generate(
     n_gen = torch.zeros(bsize, device=inputs.device, dtype=torch.int)
     n_steps = 0
     inputs = inputs[:, -1:]
-    start_time = time.time()
+    def time():
+        torch.cuda.synchronize()
+        return time.time()
+    start_time = time()
+    fields = ["child_sequencing", "create_candidates", "forward_pass", "score_candidates", "best_guess", "toss_children", "update_inputs"]
+    times = {k:0 for k in fields}
     while min(n_gen) < new_tokens:
         n_steps += 1
 
+        _start = time()
         # create candidate sequences
         child_sequence_ids_list = []
         child_sequence_ids_flattened = []
@@ -312,21 +318,28 @@ def speculative_generate(
         # add n_adds tokens to each candidate
         cache_data = kv_cache_manager.allocate_generated_tokens(child_sequence_ids_flattened, num_tokens_per_sequence)
         position_ids = torch.tensor(compute_position_ids(num_tokens_per_sequence, cache_data.context_lengths.tolist()), dtype=torch.int64, device=inputs.device)
+        times["child_sequencing"] += time()-_start
 
         # Get candidate set of speculations
+        _start = time()
         adds = speculator.generate_suffixes(embeds, inputs, threshes, top_k)  # b k h
         inputs = torch.cat(
             [inputs.unsqueeze(1).expand(bsize, top_k, 1), adds], dim=-1
         ).int()  # b k 1+h
         inputs = inputs.view(-1, n_adds)  # bk 1+h
+        times["create_candidates"] += time()-_start
+
         # Base model forward pass
+        _start = time()
         output = model(
             inputs, include_embeds=True, position_ids=position_ids, cache_data=cache_data, **kwargs
         )
         logits, past_key_value_states, embeds = output
         next_vals = torch.argmax(logits, dim=-1)  # bk 1+h
+        times["forward_pass"] += time()-_start
 
         # Check correctness of speculator predictions
+        _start = time()
         test = inputs.roll(-1, 1).eq(next_vals).cumprod(1)
         n_correct = (
             test.sum(1).clamp(0, n_adds - 1).view(bsize, top_k)
@@ -335,13 +348,16 @@ def speculative_generate(
         best_guess_unflat = (
             best_guess.unsqueeze(1).expand(bsize, n_adds).unsqueeze(1)
         )  # b 1 1+h
+        times["score_candidates"] += time()-_start
 
         # Set global values to those of best guess
+        _start = time()
         next_vals = next_vals.view(bsize, top_k, n_adds).gather(1, best_guess_unflat).squeeze(1)  # b 1+h
         n_correct = n_correct.gather(1, best_guess.unsqueeze(1)).squeeze(1)  # b
         embeds = embeds.view(bsize, top_k, *embeds.size()[1:]).gather(
             1, best_guess_unflat.unsqueeze(3).expand(-1, -1, -1, embeds.size(2))
         ).squeeze(1)  # b 1+h d
+        times["best_guess"] += time()-_start
 
         if verbose:
             test = inputs.view(bsize, top_k, n_adds).gather(1, best_guess_unflat).squeeze(1)
@@ -354,6 +370,7 @@ def speculative_generate(
                 )
 
         # free all worst candidates and keep best candidates as parents
+        _start = time()
         parent_sequence_ids = []
         for parent_index, child_sequence_ids in enumerate(child_sequence_ids_list):
             best_index = best_guess[parent_index].item()
@@ -366,8 +383,10 @@ def speculative_generate(
             best_sequence_id = child_sequence_ids[best_index]
             parent_sequence_ids.append(best_sequence_id)
             kv_cache_manager.remove_tokens(best_sequence_id, n_adds - n_correct[parent_index].item() - 1)
+        times["toss_children"] += time()-_start
 
         # Toss any wrong speculator tokens
+        _start = time()
         next_vals_split = list(next_vals)
         next_vals_split = [
             next_vals_split[i][: n_correct[i] + 1] for i in range(len(next_vals_split))
@@ -382,6 +401,7 @@ def speculative_generate(
             torch.cat((result[i], next_vals_split[i]), dim=0) for i in range(bsize)
         ]
         inputs = torch.stack([line[-1:] for line in next_vals_split], dim=0)  # b 1
+        times["update_inputs"] += time()-_start
 
         if verbose:
             for line in result:
@@ -396,4 +416,4 @@ def speculative_generate(
             prefix = prefix.prefix
 
     end_time = time.time()
-    return result, n_steps, (end_time - start_time)
+    return result, n_steps, (end_time - start_time), times

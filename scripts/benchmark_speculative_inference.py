@@ -135,9 +135,10 @@ torch.cuda.empty_cache()
 bsize = args.bsize
 steps = {}
 outs = []
-for k in [0, 2, 5, 10, 25]:
+for k in [2, 4, 8]:
     steps[k] = []
-    for j in range(len(data) // bsize):
+    alltimes = {}
+    for j in range(5): #len(data) // bsize):
         seqs = data[j * bsize : j * bsize + bsize]
         max_seq = max(len(line) for line in seqs)
         inp = [torch.IntTensor(line).cuda() for line in seqs]
@@ -157,7 +158,7 @@ for k in [0, 2, 5, 10, 25]:
                 )
             else:
                 start_time = time.time()
-                out, nsteps, generation_time = speculative_generate(
+                out, nsteps, generation_time, times = speculative_generate(
                     model,
                     inp,
                     test,
@@ -173,9 +174,16 @@ for k in [0, 2, 5, 10, 25]:
 
         for i in range(bsize):
             num_generated = len(out[i]) - len(inp[i])
-            print(f"Ex {j*bsize+i}, topk={k}: {num_generated} tokens in {nsteps} steps.")
-            print(f"--- avg per token: {total_time / len(out[i])}, avg per new token: {generation_time / num_generated}")
+            # print(f"Ex {j*bsize+i}, topk={k}: {num_generated} tokens in {nsteps} steps.")
+            # print(f"--- avg per token: {total_time / len(out[i])}, avg per new token: {generation_time / num_generated}")
             steps[k].append([nsteps * 100 / num_generated, total_time / len(out[i]), generation_time / num_generated])
+        
+        for field in times:
+            if field not in alltimes:
+                alltimes[field] = 0
+            else:
+                alltimes[field] += times[field]
+    print(alltimes)
 
 if len(args.output_path) > 0:
     torch.save(steps, os.path.join(args.output_path, "steps_for_100_at_k.pth"))
