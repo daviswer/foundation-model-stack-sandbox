@@ -153,6 +153,7 @@ for k in [1, 2, 4, 8, 16, 32]:
                     max_seq_len=4096,
                     top_k=k,
                     kv_cache_manager=kv_cache,
+                    threshes=[6,3,2]
                 )
             end_time = time.time()
             total_time = end_time - start_time
