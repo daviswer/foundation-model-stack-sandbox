@@ -118,6 +118,7 @@ kv_cache = PagedKVCacheManager(
 )
 
 data = torch.load(args.data_path)
+data = data*4
 print("Data prepared!")
 
 test = Speculator(n_predict=3, emb_dim=model.config.emb_dim)
@@ -135,7 +136,7 @@ torch.cuda.empty_cache()
 k = 5
 steps = {}
 outs = []
-for bsize in [1, 2, 4]:
+for bsize in [5, 10, 20]:
     steps[bsize] = []
     alltimes = {}
     for j in range(20): #len(data) // bsize):
