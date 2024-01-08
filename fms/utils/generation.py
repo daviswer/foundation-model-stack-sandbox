@@ -62,6 +62,13 @@ def generate(
             past_key_value_states args in forward method.
     """
 
+    # Build padded batched input tensor
+    max_len = max([seq.size(0) for seq in input_ids])
+    n_pads_init = [max_len - seq.size(0) for seq in input_ids]
+    input_ids = torch.stack(
+        [F.pad(input_ids[i], (n_pads_init[i], 0)) for i in range(len(input_ids))]
+    )
+
     batched = False
     if num_beams != 1:
         raise NotImplementedError("generate() does yet not support beam search")
