@@ -144,14 +144,14 @@ for bsize in [1, 2, 4]:
         inp = [torch.IntTensor(line).cuda() for line in seqs]
         with torch.no_grad():
             start_time = time.time()
-            out, nsteps, generation_time, times = speculative_generate(
+            out, nsteps, generation_time, times = generate(
                 model,
                 inp,
-                test,
-                new_tokens=100,
+                max_new_tokens=100,
                 max_seq_len=4096,
-                top_k=k,
-                kv_cache_manager=kv_cache,
+                do_sample=False,
+                # top_k=k,
+                # kv_cache_manager=kv_cache,
             )
         end_time = time.time()
         total_time = end_time - start_time

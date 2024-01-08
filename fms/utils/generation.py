@@ -61,6 +61,14 @@ def generate(
         use_cache: requires that the model accept use_cache and
             past_key_value_states args in forward method.
     """
+
+    # Build padded batched input tensor
+    max_len = max([seq.size(0) for seq in input_ids])
+    n_pads_init = [max_len - seq.size(0) for seq in input_ids]
+    input_ids = torch.stack(
+        [F.pad(input_ids[i], (n_pads_init[i], 0)) for i in range(len(input_ids))]
+    )
+
     batched = False
     if num_beams != 1:
         raise NotImplementedError("generate() does yet not support beam search")
@@ -90,7 +98,10 @@ def generate(
                 dtype=torch.get_default_dtype(),
                 device=model.device,  # type: ignore
             )
-
+    def _time():
+        torch.cuda.synchronize()
+        return time.time()
+    times = {"forward_pass":0}
     for i in range(max_new_tokens):
 
         input_ids = next_input[:, -max_seq_len:]
@@ -138,12 +149,16 @@ def generate(
             kwargs["cache_data"] = cache_data
             kwargs["position_ids"] = torch.tensor(position_ids, device=input_ids.device)
 
+        if i > 0:
+            _start = _time()
         output = model(input_ids, **kwargs)
         if use_cache:
             logits, _ = output
         else:
             logits = output
         logits = logits[:, -1, :]
+        if i > 0:
+            times["forward_pass"] += _time() - _start
 
         if do_sample:
             # get logits from last value in sequence nad scale
@@ -175,7 +190,7 @@ def generate(
         kv_cache_manager.free_sequences(sequence_ids)  # type: ignore
 
     end_time = time.time()
-    return result, max_new_tokens, (end_time - start_time), {}
+    return result, max_new_tokens, (end_time - start_time), times
 
 
 def truncate_after_eos(result, eos_token_id):
