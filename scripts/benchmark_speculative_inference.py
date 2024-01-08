@@ -150,8 +150,9 @@ for bsize in [1, 2, 4]:
                 max_new_tokens=100,
                 max_seq_len=4096,
                 do_sample=False,
+                use_cache=True,
                 # top_k=k,
-                # kv_cache_manager=kv_cache,
+                kv_cache_manager=kv_cache,
             )
         end_time = time.time()
         total_time = end_time - start_time
