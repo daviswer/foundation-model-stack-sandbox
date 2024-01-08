@@ -148,7 +148,7 @@ for k in [1, 2, 4]:
                 out, nsteps, generation_time, times = speculative_generate(
                     model,
                     inp,
-                    max_new_tokens=100,
+                    new_tokens=100,
                     max_seq_len=4096,
                     top_k=k,
                     kv_cache_manager=kv_cache,
