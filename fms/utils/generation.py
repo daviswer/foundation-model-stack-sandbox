@@ -155,7 +155,7 @@ def generate(
                 # todo: is this supported?
                 # if contiguous_cache:
             sequence_ids: List[int] = cache_data.sequence_ids
-            print("TEST:", len(num_tokens_per_sequence), len(context_lengths))
+            print("TEST:", num_tokens_per_sequence, context_lengths)
             position_ids = compute_position_ids(
                 num_tokens_per_sequence, context_lengths
             )
