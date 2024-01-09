@@ -336,7 +336,8 @@ def speculative_generate(
     start_time = _time()
     fields = ["child_sequencing", "create_candidates", "forward_pass", "score_candidates", "best_guess", "toss_children", "update_inputs"]
     times = {k:0 for k in fields}
-    while min(n_gen) < new_tokens:
+    # while min(n_gen) < new_tokens:
+    for _ in range(new_tokens):
         n_steps += 1
 
         _start = _time()

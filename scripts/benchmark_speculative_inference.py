@@ -133,7 +133,7 @@ test.cuda()
 print("Speculator ready!")
 
 torch.cuda.empty_cache()
-for k in [1]: #[1, 2, 4, 8, 16, 32]:
+for k in [1, 2, 4, 8, 16, 32]:
     steps = {}
     outs = []
     for bsize in [1, 2, 4, 8]:
@@ -152,13 +152,13 @@ for k in [1]: #[1, 2, 4, 8, 16, 32]:
                     inp,
                     # test,
                     # new_tokens=100,
-                    max_new_tokens=100,
+                    max_new_tokens=30,
                     max_seq_len=4096,
                     top_k=k,
                     kv_cache_manager=kv_cache,
                     use_cache=True,
                     do_sample=False,
-                    expand = False
+                    expand = True
                 )
             end_time = time.time()
             total_time = end_time - start_time
