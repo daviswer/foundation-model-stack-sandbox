@@ -153,7 +153,7 @@ for k in [1, 2, 4, 8, 16, 32]:
                     test,
                     new_tokens=100,
                     # max_new_tokens=30,
-                    # max_seq_len=4096,
+                    max_seq_len=4096,
                     top_k=k,
                     kv_cache_manager=kv_cache,
                     # use_cache=True,
