@@ -147,17 +147,17 @@ for k in [1, 2, 4, 8, 16, 32]:
             inp = [torch.IntTensor(line).cuda() for line in seqs]
             with torch.no_grad():
                 start_time = time.time()
-                out, nsteps, generation_time, times = generate(
+                out, nsteps, generation_time, times = speculative_generate(
                     model,
                     inp,
-                    # test,
-                    # new_tokens=100,
-                    max_new_tokens=30,
-                    max_seq_len=4096,
+                    test,
+                    new_tokens=100,
+                    # max_new_tokens=30,
+                    # max_seq_len=4096,
                     top_k=k,
                     kv_cache_manager=kv_cache,
-                    use_cache=True,
-                    do_sample=False,
+                    # use_cache=True,
+                    # do_sample=False,
                     expand = True
                 )
             end_time = time.time()
