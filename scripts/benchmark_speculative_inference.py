@@ -112,7 +112,7 @@ kv_cache = PagedKVCacheManager(
     model.config.nlayers,
     model.config.nheads,
     model.config.emb_dim,
-    total_num_gpu_blocks=2000,
+    # total_num_gpu_blocks=2000,
     tensor_parallel_size=dist.get_world_size() if args.distributed else 1,
     dtype=torch.get_default_dtype(),
 )
@@ -175,9 +175,9 @@ for k in [1, 2, 4, 8, 16, 32]:
                     alltimes[field] += times[field]
         print()
         print("bsize =",bsize,"k =",k)
-        print(torch.cuda.max_memory_allocated())
         for field in alltimes:
             print(field, "{:.2f}".format(alltimes[field]))
+        print(torch.cuda.max_memory_allocated()//1000000/1000)
         
 
 # if len(args.output_path) > 0:
