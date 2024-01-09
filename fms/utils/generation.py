@@ -155,6 +155,7 @@ def generate(
                 # todo: is this supported?
                 # if contiguous_cache:
             sequence_ids: List[int] = cache_data.sequence_ids
+            print("TEST:", len(num_tokens_per_sequence), len(context_lengths))
             position_ids = compute_position_ids(
                 num_tokens_per_sequence, context_lengths
             )
@@ -200,7 +201,10 @@ def generate(
         and kv_cache_manager
         and callable(getattr(kv_cache_manager, "free_sequences", None))
     ):
-        kv_cache_manager.free_sequences(sequence_ids)  # type: ignore
+        for child_sequence_id in child_sequence_ids_flattened:
+            kv_cache_manager.free(child_sequence_id)
+        kv_cache_manager.free_sequences(parent_sequence_ids)
+        # kv_cache_manager.free_sequences(sequence_ids)  # type: ignore
 
     end_time = time.time()
     return result, max_new_tokens, (end_time - start_time), times
