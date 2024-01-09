@@ -140,6 +140,7 @@ for k in [1, 2, 4, 8, 16, 32]:
         steps[bsize] = []
         alltimes = {}
         torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
         for j in range(20): #len(data) // bsize):
             seqs = data[j * bsize : j * bsize + bsize]
             max_seq = max(len(line) for line in seqs)
@@ -174,7 +175,7 @@ for k in [1, 2, 4, 8, 16, 32]:
                     alltimes[field] += times[field]
         print()
         print("bsize =",bsize,"k =",k)
-        print(torch.cuda.memory_allocated())
+        print(torch.cuda.max_memory_allocated())
         for field in alltimes:
             print(field, "{:.2f}".format(alltimes[field]))
         
