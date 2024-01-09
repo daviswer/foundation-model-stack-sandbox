@@ -112,7 +112,7 @@ kv_cache = PagedKVCacheManager(
     model.config.nlayers,
     model.config.nheads,
     model.config.emb_dim,
-    total_num_gpu_blocks=2000,
+    total_num_gpu_blocks=2800,
     tensor_parallel_size=dist.get_world_size() if args.distributed else 1,
     dtype=torch.get_default_dtype(),
 )
@@ -133,10 +133,10 @@ test.cuda()
 print("Speculator ready!")
 
 torch.cuda.empty_cache()
-for k in [1, 2, 4, 8, 16, 32]:
+for k in [1]: #[1, 2, 4, 8, 16, 32]:
     steps = {}
     outs = []
-    for bsize in [1, 2, 4]:
+    for bsize in [1, 2, 4, 8]:
         steps[bsize] = []
         alltimes = {}
         torch.cuda.empty_cache()
@@ -157,7 +157,8 @@ for k in [1, 2, 4, 8, 16, 32]:
                     top_k=k,
                     kv_cache_manager=kv_cache,
                     use_cache=True,
-                    do_sample=False
+                    do_sample=False,
+                    expand = False
                 )
             end_time = time.time()
             total_time = end_time - start_time

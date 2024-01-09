@@ -40,6 +40,7 @@ def generate(
     use_cache: bool = False,
     kv_cache_manager: Optional[KVCacheManager] = None,
     contiguous_cache: bool = False,
+    expand: bool = False
 ):
     """
     A trivial generate function that can be used for validation/testing in
@@ -108,18 +109,19 @@ def generate(
 
         if i == 1:
             start_time = time.time()
-            # Inflate cache
-            parent_sequence_ids = cache_data.sequence_ids
-            child_sequence_ids_list = []
-            child_sequence_ids_flattened = []
-            # each parent will have top_k*n_adds child sequences
-            for parent_sequence_id in parent_sequence_ids:
-                child_sequence_ids = kv_cache_manager.add_child_sequences(parent_sequence_id, top_k*4)
-                child_sequence_ids_list.append(child_sequence_ids)
-                child_sequence_ids_flattened.extend(child_sequence_ids)
-            sequence_ids = child_sequence_ids_flattened
-            input_ids = torch.cat([input_ids]*4*top_k, dim=0)
-            result = torch.cat([result]*4*top_k, dim=0)
+            if expand:
+                # Inflate cache
+                parent_sequence_ids = cache_data.sequence_ids
+                child_sequence_ids_list = []
+                child_sequence_ids_flattened = []
+                # each parent will have top_k*n_adds child sequences
+                for parent_sequence_id in parent_sequence_ids:
+                    child_sequence_ids = kv_cache_manager.add_child_sequences(parent_sequence_id, top_k*4)
+                    child_sequence_ids_list.append(child_sequence_ids)
+                    child_sequence_ids_flattened.extend(child_sequence_ids)
+                sequence_ids = child_sequence_ids_flattened
+                input_ids = torch.cat([input_ids]*4*top_k, dim=0)
+                result = torch.cat([result]*4*top_k, dim=0)
         
 
         # compute the mask
@@ -200,10 +202,12 @@ def generate(
         and kv_cache_manager
         and callable(getattr(kv_cache_manager, "free_sequences", None))
     ):
-        for child_sequence_id in child_sequence_ids_flattened:
-            kv_cache_manager.free(child_sequence_id)
-        kv_cache_manager.free_sequences(parent_sequence_ids)
-        # kv_cache_manager.free_sequences(sequence_ids)  # type: ignore
+        if expand:
+            for child_sequence_id in child_sequence_ids_flattened:
+                kv_cache_manager.free(child_sequence_id)
+            kv_cache_manager.free_sequences(parent_sequence_ids)
+        else:
+            kv_cache_manager.free_sequences(sequence_ids)  # type: ignore
 
     end_time = time.time()
     return result, max_new_tokens, (end_time - start_time), times
