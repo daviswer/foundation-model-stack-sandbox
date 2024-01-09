@@ -117,7 +117,7 @@ def generate(
                 child_sequence_ids = kv_cache_manager.add_child_sequences(parent_sequence_id, top_k*4)
                 child_sequence_ids_list.append(child_sequence_ids)
                 child_sequence_ids_flattened.extend(child_sequence_ids)
-            cache_data = kv_cache_manager.allocate_generated_tokens(child_sequence_ids_flattened, num_tokens_per_sequence)
+            sequence_ids = child_sequence_ids
             input_ids = torch.cat([input_ids]*4*top_k, dim=0)
             result = torch.cat([result]*4*top_k, dim=0)
         
