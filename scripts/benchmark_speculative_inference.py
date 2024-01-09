@@ -158,7 +158,7 @@ for k in [1, 2, 4, 8, 16, 32]:
                     kv_cache_manager=kv_cache,
                     # use_cache=True,
                     # do_sample=False,
-                    expand = True
+                    # expand = True
                 )
             end_time = time.time()
             total_time = end_time - start_time
