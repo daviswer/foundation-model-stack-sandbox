@@ -112,7 +112,7 @@ kv_cache = PagedKVCacheManager(
     model.config.nlayers,
     model.config.nheads,
     model.config.emb_dim,
-    total_num_gpu_blocks=4000,
+    total_num_gpu_blocks=2000,
     tensor_parallel_size=dist.get_world_size() if args.distributed else 1,
     dtype=torch.get_default_dtype(),
 )
@@ -147,15 +147,17 @@ for k in [1, 2, 4, 8, 16, 32]:
             inp = [torch.IntTensor(line).cuda() for line in seqs]
             with torch.no_grad():
                 start_time = time.time()
-                out, nsteps, generation_time, times = speculative_generate(
+                out, nsteps, generation_time, times = generate(
                     model,
                     inp,
-                    test,
-                    new_tokens=100,
+                    # test,
+                    # new_tokens=100,
+                    max_new_tokens=100,
                     max_seq_len=4096,
                     top_k=k,
                     kv_cache_manager=kv_cache,
-                    threshes=[6,3,2]
+                    use_cache=True,
+                    do_sample=False
                 )
             end_time = time.time()
             total_time = end_time - start_time

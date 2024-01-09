@@ -108,6 +108,19 @@ def generate(
 
         if i == 1:
             start_time = time.time()
+            # Inflate cache
+            parent_sequence_ids = cache_data.sequence_ids
+            child_sequence_ids_list = []
+            child_sequence_ids_flattened = []
+            # each parent will have top_k*n_adds child sequences
+            for parent_sequence_id in parent_sequence_ids:
+                child_sequence_ids = kv_cache_manager.add_child_sequences(parent_sequence_id, top_k*4)
+                child_sequence_ids_list.append(child_sequence_ids)
+                child_sequence_ids_flattened.extend(child_sequence_ids)
+            cache_data = kv_cache_manager.allocate_generated_tokens(child_sequence_ids_flattened, num_tokens_per_sequence)
+            input_ids = torch.cat([input_ids]*4*top_k, dim=0)
+            result = torch.cat([result]*4*top_k, dim=0)
+        
 
         # compute the mask
         if not use_cache or i == 0:
