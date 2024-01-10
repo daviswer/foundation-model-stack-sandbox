@@ -119,6 +119,7 @@ kv_cache = PagedKVCacheManager(
 
 data = torch.load(args.data_path)
 data = data*4
+data = [line[:100] for line in data]
 print("Data prepared!")
 
 test = Speculator(n_predict=3, emb_dim=model.config.emb_dim)
