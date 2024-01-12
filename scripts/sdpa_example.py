@@ -13,7 +13,12 @@ for bsize in bsizes:
     for _ in range(100):
         inp = torch.randn(bsize, 40, 2048, 128).cuda()
         _start = _time()
-        f.scaled_dot_product_attention(inp, inp, inp, is_causal=True)
+        with torch.backends.cuda.sdp_kernel(
+            enable_flash=True,
+            enable_math=False,
+            enable_mem_efficient=False,
+        ):
+            f.scaled_dot_product_attention(inp, inp, inp, is_causal=True)
         times[bsize] += _time() - _start
 for b in times:
     print(f"Bsize {b}, time:"+"{:.2f}".format(times[b]))
