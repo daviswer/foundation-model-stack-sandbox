@@ -316,6 +316,12 @@ def speculative_generate(
     n_adds = speculator.n_predict + 1
     inputs = inputs[:, -max_seq_len + n_adds :]
     position_ids = torch.tensor(compute_position_ids(num_tokens_per_sequence), dtype=torch.int64, device=inputs.device)
+    def _time():
+        torch.cuda.synchronize()
+        return time.time()
+    fields = ["step0", "child_sequencing", "create_candidates", "forward_pass", "score_candidates", "best_guess", "toss_children", "update_inputs"]
+    times = {k:0 for k in fields}
+    _start = _time()
     output = model(
         inputs[:, :-1],
         include_embeds=True,
@@ -324,18 +330,14 @@ def speculative_generate(
         cache_data=cache_data,
         **kwargs
     )
+    times["step0"] = _time() - _start
     _, past_key_value_states, embeds = output
     embeds = embeds[:, -1:]
 
     n_gen = torch.zeros(bsize, device=inputs.device, dtype=torch.int)
     n_steps = 0
     inputs = inputs[:, -1:]
-    def _time():
-        torch.cuda.synchronize()
-        return time.time()
     start_time = _time()
-    fields = ["child_sequencing", "create_candidates", "forward_pass", "score_candidates", "best_guess", "toss_children", "update_inputs"]
-    times = {k:0 for k in fields}
     # while min(n_gen) < new_tokens:
     for _ in range(new_tokens):
         n_steps += 1
