@@ -11,7 +11,7 @@ times = {b:0 for b in bsizes}
 for bsize in bsizes:
     print(f"Benchmarking bsize {bsize}...")
     for _ in range(100):
-        inp = torch.randn(bsize, 40, 2048, 128).cuda()
+        inp = torch.randn(bsize, 40, 2048, 128).bfloat16().cuda()
         _start = _time()
         with torch.backends.cuda.sdp_kernel(
             enable_flash=True,
