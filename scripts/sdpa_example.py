@@ -16,4 +16,4 @@ for bsize in bsizes:
         f.scaled_dot_product_attention(inp, inp, inp, is_causal=True)
         times[bsize] += _time() - _start
 for b in times:
-    print("Bsize {b}, time:"+"{:.2f}".format(times[b]))
+    print(f"Bsize {b}, time:"+"{:.2f}".format(times[b]))
