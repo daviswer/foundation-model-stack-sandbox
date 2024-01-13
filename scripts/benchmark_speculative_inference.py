@@ -134,7 +134,7 @@ test.cuda()
 print("Speculator ready!")
 
 torch.cuda.empty_cache()
-for k in [1,2,4,8]: #,16,32]:
+for k in [1,2,4,8,16,32]:
     steps = {}
     outs = []
     for bsize in [1, 2, 4]:
