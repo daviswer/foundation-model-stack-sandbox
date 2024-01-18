@@ -68,6 +68,11 @@ parser.add_argument(
     action="store_true",
     help="This is a distributed job (multiple instances run with RANK+WORLD_SIZE)",
 )
+parser.add_argument(
+    "--compile",
+    action="store_true",
+    help="Call torch compile on base model",
+)
 parser.add_argument("--device_type", type=str, default="cuda")
 
 args = parser.parse_args()
@@ -104,6 +109,9 @@ model = get_model(
     norm_eps=1e-6,
 )
 model.eval()
+if args.compile:
+    torch._inductor.config.joint_graph_constant_folding = False
+    model = torch.compile(model)
 
 print("Model loaded!")
 
