@@ -365,9 +365,7 @@ def speculative_generate(
         inputs = torch.cat(
             [inputs.unsqueeze(1).expand(bsize, top_k, 1), adds], dim=-1
         ).int()  # b k 1+h
-        print(inputs.size())
         flat_inputs, unflat_indices, flat_indices = flatten_batch(inputs) # b', b k 1+h
-        print(inputs.size(), unflat_indices.size())
         flat_inputs = flat_inputs[None,] # 1 b'
         cache_data.unflatten_indices = unflat_indices
         cache_data.flatten_indices = flat_indices
@@ -381,13 +379,12 @@ def speculative_generate(
         ) # 1 b' v
         logits, _, embeds = output # 1 n' v, 1 n' d
         next_vals = torch.argmax(logits, dim=-1)  # 1 n'
-        next_vals = select_inflate_dim(next_vals[0], unflat_indices.view(-1, unflat_indices.size(2))) # bk 1+h
+        next_vals = select_inflate_dim(next_vals[0], unflat_indices) # b k 1+h
         embeds = select_inflate_dim(embeds[0], unflat_indices) # b k 1+h d
         times["forward_pass"] += _time()-_start
 
         # Check correctness of speculator predictions
         _start = _time()
-        print(inputs.size(), next_vals.size())
         test = inputs.roll(-1, 1).eq(next_vals).cumprod(1)
         n_correct = (
             test.sum(1).clamp(0, n_adds - 1).view(bsize, top_k)
