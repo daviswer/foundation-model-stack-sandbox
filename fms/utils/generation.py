@@ -365,9 +365,9 @@ def speculative_generate(
         inputs = torch.cat(
             [inputs.unsqueeze(1).expand(bsize, top_k, 1), adds], dim=-1
         ).int()  # b k 1+h
-        print(input.size())
+        print(inputs.size())
         flat_inputs, unflat_indices, flat_indices = flatten_batch(inputs) # b', b k 1+h
-        print(input.size())
+        print(inputs.size())
         flat_inputs = flat_inputs[None,] # 1 b'
         cache_data.unflatten_indices = unflat_indices
         cache_data.flatten_indices = flat_indices
