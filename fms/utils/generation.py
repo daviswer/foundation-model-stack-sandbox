@@ -7,7 +7,7 @@ from torch import distributed as dist
 
 from fms.modules.positions import compute_position_ids
 from fms.modules.speculator import Speculator
-from fms.utils.cache import KVCacheManager, CacheDataWithMetadata
+from fms.utils.cache import KVCacheManager, CacheDataWithMetadata, flatten_batch, unflatten_batch
 from fms.utils.cache.expandable import ExpandableKVCacheManager
 from fms.utils.cache.paged import PagedKVCacheManager
 
@@ -364,16 +364,21 @@ def speculative_generate(
         inputs = torch.cat(
             [inputs.unsqueeze(1).expand(bsize, top_k, 1), adds], dim=-1
         ).int()  # b k 1+h
-        inputs = inputs.view(-1, n_adds)  # bk 1+h
+        flat_inputs, unflat_indices, flat_indices = flatten_batch(inputs) # b', b k 1+h
+        flat_inputs = flat_inputs[None,] # 1 b'
+        cache_data.unflatten_indices = unflat_indices
+        cache_data.flatten_indices = flat_indices
         times["create_candidates"] += _time()-_start
 
         # Base model forward pass
         _start = _time()
         output = model(
-            inputs, include_embeds=True, position_ids=position_ids, cache_data=cache_data, **kwargs
-        )
-        logits, past_key_value_states, embeds = output
-        next_vals = torch.argmax(logits, dim=-1)  # bk 1+h
+            flat_inputs, include_embeds=True, position_ids=position_ids, cache_data=cache_data, **kwargs
+        ) # 1 b' v
+        logits, _, embeds = output # 1 n' v, 1 n' d
+        next_vals = torch.argmax(logits, dim=-1)  # 1 n'
+        next_vals = unflatten_batch(next_vals[0], unflat_indices.view(-1, unflat_indices.size(2))) # bk 1+h
+        embeds = unflatten_batch(embeds[0], unflat_indices) # b k 1+h d
         times["forward_pass"] += _time()-_start
 
         # Check correctness of speculator predictions
