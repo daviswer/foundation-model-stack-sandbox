@@ -399,7 +399,7 @@ def speculative_generate(
         _start = _time()
         next_vals = next_vals.view(bsize, top_k, n_adds).gather(1, best_guess_unflat).squeeze(1)  # b 1+h
         n_correct = n_correct.gather(1, best_guess.unsqueeze(1)).squeeze(1)  # b
-        embeds = embeds.view(bsize, top_k, *embeds.size()[1:]).gather(
+        embeds = embeds.view(bsize, top_k, *embeds.size()[2:]).gather(
             1, best_guess_unflat.unsqueeze(3).expand(-1, -1, -1, embeds.size(2))
         ).squeeze(1)  # b 1+h d
         times["best_guess"] += _time()-_start
