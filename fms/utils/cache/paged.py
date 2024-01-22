@@ -298,6 +298,8 @@ class PagedAttentionCacheData(CacheDataWithMetadata):
             num_heads=self.num_heads,
             head_size=self.head_size,
             is_generating=self.is_generating,
+            flatten_indices=None,
+            unflatten_indices=None,
         )
 
     def is_filled(self) -> bool:
