@@ -120,7 +120,7 @@ kv_cache = PagedKVCacheManager(
     model.config.nlayers,
     model.config.nheads,
     model.config.emb_dim,
-    total_num_gpu_blocks=2000, # 2800 for non-compile
+    total_num_gpu_blocks=2800,
     tensor_parallel_size=dist.get_world_size() if args.distributed else 1,
     dtype=torch.get_default_dtype(),
 )

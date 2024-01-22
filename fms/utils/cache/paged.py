@@ -14,7 +14,6 @@ from fms.utils.cache import (
     CacheDataWithMetadata,
     KVCacheManager,
     KVCache,
-    select_inflate_dim,
 )
 
 lib = torch.library.Library("paged_attention", "FRAGMENT")
@@ -237,25 +236,14 @@ class PagedAttentionCacheDataLayer(CacheDataLayer):
     num_heads: int  # this could be kvheads or num_heads
     head_size: int
     is_generating: bool
-    unflatten_indices: Optional[torch.Tensor]
-    flatten_indices: Optional[torch.Tensor]
 
     def store(
         self, keys: torch.Tensor, values: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # k/v: 1 h n' d
-        if self.unflatten_indices is not None:
-            # inp: 1 n' h d
-            # inds: b k n
-            keys = select_inflate_dim(keys[0].transpose(0,1), self.unflatten_indices) # b k n h d
-            values = select_inflate_dim(values[0].transpose(0,1), self.unflatten_indices)
-            key_to_cache = keys.view(-1, *keys.size()[3:])
-            value_to_cache = values.view(-1, *values.size()[3:]) # bkn h d
-        else:
-            key_to_cache = keys.transpose(2, 1).reshape(-1, self.num_heads, self.head_size) # bkn h d
-            value_to_cache = values.transpose(2, 1).reshape(
-                -1, self.num_heads, self.head_size
-            )
+        key_to_cache = keys.transpose(2, 1).reshape(-1, self.num_heads, self.head_size)
+        value_to_cache = values.transpose(2, 1).reshape(
+            -1, self.num_heads, self.head_size
+        )
 
         (
             keys_cache_output,
@@ -298,8 +286,6 @@ class PagedAttentionCacheData(CacheDataWithMetadata):
             num_heads=self.num_heads,
             head_size=self.head_size,
             is_generating=self.is_generating,
-            flatten_indices=None,
-            unflatten_indices=None,
         )
 
     def is_filled(self) -> bool:

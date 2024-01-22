@@ -7,7 +7,7 @@ from torch import distributed as dist
 
 from fms.modules.positions import compute_position_ids
 from fms.modules.speculator import Speculator
-from fms.utils.cache import KVCacheManager, CacheDataWithMetadata, flatten_batch, select_inflate_dim
+from fms.utils.cache import KVCacheManager, CacheDataWithMetadata
 from fms.utils.cache.expandable import ExpandableKVCacheManager
 from fms.utils.cache.paged import PagedKVCacheManager
 
@@ -331,7 +331,7 @@ def speculative_generate(
         **kwargs
     )
     times["step0"] = _time() - _start
-    _, _, embeds = output
+    _, past_key_value_states, embeds = output
     embeds = embeds[:, -1:]
 
     n_gen = torch.zeros(bsize, device=inputs.device, dtype=torch.int)
@@ -355,8 +355,7 @@ def speculative_generate(
 
         # add n_adds tokens to each candidate
         cache_data = kv_cache_manager.allocate_generated_tokens(child_sequence_ids_flattened, num_tokens_per_sequence)
-        position_ids = torch.tensor(compute_position_ids(num_tokens_per_sequence, cache_data.context_lengths.tolist()), 
-                                    dtype=torch.int64, device=inputs.device) # bk 1+h
+        position_ids = torch.tensor(compute_position_ids(num_tokens_per_sequence, cache_data.context_lengths.tolist()), dtype=torch.int64, device=inputs.device)
         times["child_sequencing"] += _time()-_start
 
         # Get candidate set of speculations
@@ -365,28 +364,21 @@ def speculative_generate(
         inputs = torch.cat(
             [inputs.unsqueeze(1).expand(bsize, top_k, 1), adds], dim=-1
         ).int()  # b k 1+h
-        flat_inputs, unflat_indices, flat_indices = flatten_batch(inputs) # b', b k 1+h
-        flat_inputs = flat_inputs[None,] # 1 b'
-        cache_data.unflatten_indices = unflat_indices
-        cache_data.flatten_indices = flat_indices
-        position_ids = select_inflate_dim(position_ids.view(-1), flat_indices)[None,]
+        inputs = inputs.view(-1, n_adds)  # bk 1+h
         times["create_candidates"] += _time()-_start
 
         # Base model forward pass
         _start = _time()
         output = model(
-            flat_inputs, include_embeds=True, position_ids=position_ids, cache_data=cache_data, **kwargs
-        ) # 1 b' v
-        logits, _, embeds = output # 1 n' v, 1 n' d
-        next_vals = torch.argmax(logits, dim=-1)  # 1 n'
-        unflat_indices = unflat_indices.view(-1, unflat_indices.size(2))
-        next_vals = select_inflate_dim(next_vals[0], unflat_indices) # bk 1+h
-        embeds = select_inflate_dim(embeds[0], unflat_indices) # bk 1+h d
+            inputs, include_embeds=True, position_ids=position_ids, cache_data=cache_data, **kwargs
+        )
+        logits, past_key_value_states, embeds = output
+        next_vals = torch.argmax(logits, dim=-1)  # bk 1+h
         times["forward_pass"] += _time()-_start
 
         # Check correctness of speculator predictions
         _start = _time()
-        test = inputs.view(-1, n_adds).roll(-1, 1).eq(next_vals).cumprod(1)
+        test = inputs.roll(-1, 1).eq(next_vals).cumprod(1)
         n_correct = (
             test.sum(1).clamp(0, n_adds - 1).view(bsize, top_k)
         )  # clamp in case pred[0]==targ[-1]
