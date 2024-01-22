@@ -331,7 +331,7 @@ def speculative_generate(
         **kwargs
     )
     times["step0"] = _time() - _start
-    _, past_key_value_states, embeds = output
+    _, _, embeds = output
     embeds = embeds[:, -1:]
 
     n_gen = torch.zeros(bsize, device=inputs.device, dtype=torch.int)
@@ -355,7 +355,8 @@ def speculative_generate(
 
         # add n_adds tokens to each candidate
         cache_data = kv_cache_manager.allocate_generated_tokens(child_sequence_ids_flattened, num_tokens_per_sequence)
-        position_ids = torch.tensor(compute_position_ids(num_tokens_per_sequence, cache_data.context_lengths.tolist()), dtype=torch.int64, device=inputs.device)
+        position_ids = torch.tensor(compute_position_ids(num_tokens_per_sequence, cache_data.context_lengths.tolist()), 
+                                    dtype=torch.int64, device=inputs.device) # bk 1+h
         times["child_sequencing"] += _time()-_start
 
         # Get candidate set of speculations
@@ -368,6 +369,7 @@ def speculative_generate(
         flat_inputs = flat_inputs[None,] # 1 b'
         cache_data.unflatten_indices = unflat_indices
         cache_data.flatten_indices = flat_indices
+        position_ids = select_inflate_dim(position_ids.view(-1), flat_indices)
         times["create_candidates"] += _time()-_start
 
         # Base model forward pass
