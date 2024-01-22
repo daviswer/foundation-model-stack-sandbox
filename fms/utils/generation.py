@@ -7,7 +7,7 @@ from torch import distributed as dist
 
 from fms.modules.positions import compute_position_ids
 from fms.modules.speculator import Speculator
-from fms.utils.cache import KVCacheManager, CacheDataWithMetadata, flatten_batch, unflatten_batch
+from fms.utils.cache import KVCacheManager, CacheDataWithMetadata, flatten_batch, select_inflate_dim
 from fms.utils.cache.expandable import ExpandableKVCacheManager
 from fms.utils.cache.paged import PagedKVCacheManager
 
@@ -377,8 +377,8 @@ def speculative_generate(
         ) # 1 b' v
         logits, _, embeds = output # 1 n' v, 1 n' d
         next_vals = torch.argmax(logits, dim=-1)  # 1 n'
-        next_vals = unflatten_batch(next_vals[0], unflat_indices.view(-1, unflat_indices.size(2))) # bk 1+h
-        embeds = unflatten_batch(embeds[0], unflat_indices) # b k 1+h d
+        next_vals = select_inflate_dim(next_vals[0], unflat_indices.view(-1, unflat_indices.size(2))) # bk 1+h
+        embeds = select_inflate_dim(embeds[0], unflat_indices) # b k 1+h d
         times["forward_pass"] += _time()-_start
 
         # Check correctness of speculator predictions
