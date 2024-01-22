@@ -380,6 +380,7 @@ def speculative_generate(
         logits, _, embeds = output # 1 n' v, 1 n' d
         next_vals = torch.argmax(logits, dim=-1)  # 1 n'
         next_vals = select_inflate_dim(next_vals[0], unflat_indices) # b k 1+h
+        print(next_vals.shape)
         embeds = select_inflate_dim(embeds[0], unflat_indices) # b k 1+h d
         times["forward_pass"] += _time()-_start
 
