@@ -387,6 +387,7 @@ def speculative_generate(
         # Check correctness of speculator predictions
         _start = _time()
         test = inputs.roll(-1, 1).eq(next_vals).cumprod(1)
+        print(test.shape, inputs.shape, next_vals.shape)
         n_correct = (
             test.sum(1).clamp(0, n_adds - 1).view(bsize, top_k)
         )  # clamp in case pred[0]==targ[-1]
