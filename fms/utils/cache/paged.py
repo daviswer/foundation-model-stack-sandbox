@@ -237,8 +237,8 @@ class PagedAttentionCacheDataLayer(CacheDataLayer):
     num_heads: int  # this could be kvheads or num_heads
     head_size: int
     is_generating: bool
-    unflatten_indices: Optional(torch.Tensor)
-    flatten_indices: Optional(torch.Tensor)
+    unflatten_indices: Optional[torch.Tensor]
+    flatten_indices: Optional[torch.Tensor]
 
     def store(
         self, keys: torch.Tensor, values: torch.Tensor
