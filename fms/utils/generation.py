@@ -369,7 +369,7 @@ def speculative_generate(
         flat_inputs = flat_inputs[None,] # 1 b'
         cache_data.unflatten_indices = unflat_indices
         cache_data.flatten_indices = flat_indices
-        position_ids = select_inflate_dim(position_ids.view(-1), flat_indices)
+        position_ids = select_inflate_dim(position_ids.view(-1), flat_indices)[None,]
         times["create_candidates"] += _time()-_start
 
         # Base model forward pass
