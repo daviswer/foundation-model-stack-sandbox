@@ -367,7 +367,7 @@ def speculative_generate(
         ).int()  # b k 1+h
         print(inputs.size())
         flat_inputs, unflat_indices, flat_indices = flatten_batch(inputs) # b', b k 1+h
-        print(inputs.size())
+        print(inputs.size(), unflat_indices.size())
         flat_inputs = flat_inputs[None,] # 1 b'
         cache_data.unflatten_indices = unflat_indices
         cache_data.flatten_indices = flat_indices
