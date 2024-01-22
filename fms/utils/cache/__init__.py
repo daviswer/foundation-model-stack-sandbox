@@ -106,9 +106,9 @@ def flatten_batch(inp):
                     lineages.append(lineage)
                     ind_flat.append(b*len(inp[0])*len(inp[0][0]) + k*len(inp[0][0]) + n)
         out.append(torch.Tensor([lineage[-1] for lineage in lineages], 
-                                device=ind_out.device, dtype=torch.int32))
+                                device=ind_out.device).int())
         batch_offset += len(lineages)
-    return torch.cat(out), ind_out, torch.Tensor(ind_flat, device=ind_out.device, dtype=torch.int32)
+    return torch.cat(out), ind_out, torch.Tensor(ind_flat, device=ind_out.device).int()
 
 def select_inflate_dim(inp, inds, dim=0):
     # Takes a flattened input of size ([...] x n x [...]) with n in slot dim, and token mappings of size (a x ... x z)
