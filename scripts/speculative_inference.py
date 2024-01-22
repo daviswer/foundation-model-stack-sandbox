@@ -170,7 +170,7 @@ def infer(ids):
         # without ntk scaling, extending the seq length too far gives bogus results.
         max_seq_len = model.config.max_expected_seq_len
 
-    result, n_steps = speculative_generate(
+    result, n_steps,_,_ = speculative_generate(
         model,
         ids,
         speculator,
