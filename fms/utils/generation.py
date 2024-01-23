@@ -240,6 +240,7 @@ def speculative_generate(
     threshes=[5, 3, 2],
     verbose_dict=None,
     kv_cache_manager: PagedKVCacheManager = None,
+    flatting = True,
 ):
     """
     A reference implementation of speculative decoding generation.
@@ -365,23 +366,28 @@ def speculative_generate(
         inputs = torch.cat(
             [inputs.unsqueeze(1).expand(bsize, top_k, 1), adds], dim=-1
         ).int()  # b k 1+h
-        flat_inputs, unflat_indices, flat_indices = flatten_batch(inputs) # b', b k 1+h
-        flat_inputs = flat_inputs[None,] # 1 b'
-        cache_data.unflatten_indices = unflat_indices
-        cache_data.flatten_indices = flat_indices
-        position_ids = select_inflate_dim(position_ids.view(-1), flat_indices)[None,]
+        
+        inputs = inputs.view(-1, n_adds) # bk 1+h
+        if flatting:
+            flat_inputs, unflat_indices, flat_indices = flatten_batch(inputs) # b', b k 1+h
+            flat_inputs = flat_inputs[None,] # 1 b'
+            cache_data.unflatten_indices = unflat_indices
+            cache_data.flatten_indices = flat_indices
+            position_ids = select_inflate_dim(position_ids.view(-1), flat_indices)[None,]
         times["create_candidates"] += _time()-_start
 
         # Base model forward pass
         _start = _time()
         output = model(
-            flat_inputs, include_embeds=True, position_ids=position_ids, cache_data=cache_data, **kwargs
+            inputs if not flatting else flat_inputs, include_embeds=True, position_ids=position_ids, cache_data=cache_data, **kwargs
         ) # 1 b' v
         logits, _, embeds = output # 1 n' v, 1 n' d
         next_vals = torch.argmax(logits, dim=-1)  # 1 n'
-        unflat_indices = unflat_indices.view(-1, unflat_indices.size(2))
-        next_vals = select_inflate_dim(next_vals[0], unflat_indices) # bk 1+h
-        embeds = select_inflate_dim(embeds[0], unflat_indices) # bk 1+h d
+        if flatting:
+            unflat_indices = unflat_indices.view(-1, unflat_indices.size(2))
+            next_vals = select_inflate_dim(next_vals[0], unflat_indices) # bk 1+h
+            embeds = select_inflate_dim(embeds[0], unflat_indices) # bk 1+h d 
+            # TODO: make more efficient by best guessing out of unflat indices rather than from here directly
         times["forward_pass"] += _time()-_start
 
         # Check correctness of speculator predictions

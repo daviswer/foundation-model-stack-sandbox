@@ -73,6 +73,11 @@ parser.add_argument(
     action="store_true",
     help="Call torch compile on base model",
 )
+parser.add_argument(
+    "--noflat",
+    action="store_true",
+    help="Disable efficient tree attention",
+)
 parser.add_argument("--device_type", type=str, default="cuda")
 
 args = parser.parse_args()
@@ -159,16 +164,19 @@ for k in [1,2,4,8,16,32]:
                 out, nsteps, generation_time, times = speculative_generate(
                     model,
                     inp,
+                    
                     test,
                     new_tokens=100,
                     threshes=[6,3,2],
+                    flatting=not args.noflat,
                     # max_new_tokens=30,
+                    # use_cache=True,
+                    # do_sample=False,
+                    # expand = True,
+                    
                     max_seq_len=4096,
                     top_k=k,
                     kv_cache_manager=kv_cache,
-                    # use_cache=True,
-                    # do_sample=False,
-                    # expand = True
                 )
             end_time = time.time()
             total_time = end_time - start_time
