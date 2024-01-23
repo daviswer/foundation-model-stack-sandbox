@@ -156,7 +156,7 @@ for k in [1,2,4,8,16,32]:
             inp = [torch.IntTensor(line).cuda() for line in seqs]
             with torch.no_grad():
                 start_time = time.time()
-                out, nsteps, generation_time, times = speculative_generate(
+                out, nsteps, generation_time, times = generate(
                     model,
                     inp,
                     test,
@@ -190,7 +190,7 @@ for k in [1,2,4,8,16,32]:
         print("bsize =",bsize,"k =",k)
         for field in alltimes:
             print(field, "{:.2f}".format(alltimes[field]))
-        print(torch.cuda.max_memory_allocated()//1000000/1000)
+        # print(torch.cuda.max_memory_allocated()//1000000/1000)
         
 
 # if len(args.output_path) > 0:
