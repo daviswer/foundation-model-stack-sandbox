@@ -391,13 +391,6 @@ def speculative_generate(
             test.sum(1).clamp(0, n_adds - 1).view(bsize, top_k)
         )  # clamp in case pred[0]==targ[-1]
         best_guess = n_correct.argmax(1)  # b
-
-        print(next_vals)
-        print(inputs.view(-1, n_adds))
-        print(n_correct)
-        print(best_guess)
-        print()
-
         best_guess_unflat = (
             best_guess.unsqueeze(1).expand(bsize, n_adds).unsqueeze(1)
         )  # b 1 1+h
