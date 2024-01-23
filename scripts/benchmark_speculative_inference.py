@@ -146,11 +146,11 @@ for k in [1,2,4,8,16,32]:
     steps = {}
     outs = []
     for bsize in [1, 2, 4]:
-        steps[bsize] = []
         alltimes = {}
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
         n_tok = 0
+        n_steps = 0
         for j in range(20): #len(data) // bsize):
             seqs = data[j * bsize : j * bsize + bsize]
             max_seq = max(len(line) for line in seqs)
@@ -162,7 +162,7 @@ for k in [1,2,4,8,16,32]:
                     inp,
 
                     test,
-                    new_tokens=100,
+                    new_tokens=10,
                     threshes=[6,3,2],
                     # max_new_tokens=30,
                     # use_cache=True,
@@ -176,6 +176,7 @@ for k in [1,2,4,8,16,32]:
             end_time = time.time()
             total_time = end_time - start_time
             n_tok += sum([len(line) for line in out]) - sum([len(line) for line in inp])
+            n_steps += nsteps
             # if k == 5:
             #     outs += [line.squeeze().tolist() for line in out]
 
@@ -195,6 +196,7 @@ for k in [1,2,4,8,16,32]:
         for field in alltimes:
             print(field, "{:.2f}".format(alltimes[field]))
         print("Ntok:", n_tok)
+        print("Nsteps:", n_steps)
         # print(torch.cuda.max_memory_allocated()//1000000/1000)
         
 
