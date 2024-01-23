@@ -197,9 +197,9 @@ class MultiHeadAttention(nn.Module):
             # Pre-allocate the output tensor.
             attn = torch.empty_like(queries)
             context_lengths = cache_data_layer.context_lengths # bk
-            context_lengths = context_lengths.unsqueeze(1).expand(-1, q_len) # bk n
+            context_lengths = context_lengths.unsqueeze(1).expand(-1, cache_data_layer.unflatten_indices.size(-1)) # bk n
             context_lengths = context_lengths.sub(context_lengths.sign().cumsum(1).flip([1]).sub(1)).int().view(-1) # bkn
-            block_mappings = cache_data_layer.block_mapping.repeat_interleave(q_len, dim=0) # bkn n_blocks
+            block_mappings = cache_data_layer.block_mapping.repeat_interleave(cache_data_layer.unflatten_indices.size(-1), dim=0) # bkn n_blocks
             if cache_data_layer.flatten_indices is not None:
                 context_lengths = select_inflate_dim(context_lengths, cache_data_layer.flatten_indices) # n'
                 block_mappings = select_inflate_dim(block_mappings, cache_data_layer.flatten_indices) # n' n_blocks

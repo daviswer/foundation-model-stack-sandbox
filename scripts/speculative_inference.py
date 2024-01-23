@@ -174,7 +174,7 @@ def infer(ids):
         model,
         ids,
         speculator,
-        new_tokens=100,
+        new_tokens=10,
         max_seq_len=max_seq_len,
         kv_cache_manager=kv_cache,
     )

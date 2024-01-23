@@ -147,35 +147,32 @@ for k in [1,2,4,8,16,32]:
     outs = []
     for bsize in [1, 2, 4]:
         alltimes = {}
+        ntok = 0
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
-        n_tok = 0
-        n_steps = 0
-        for j in range(10): #len(data) // bsize):
+        for j in range(20): #len(data) // bsize):
             seqs = data[j * bsize : j * bsize + bsize]
+            max_seq = max(len(line) for line in seqs)
             inp = [torch.IntTensor(line).cuda() for line in seqs]
             with torch.no_grad():
                 start_time = time.time()
                 out, nsteps, generation_time, times = speculative_generate(
                     model,
                     inp,
-
                     test,
-                    new_tokens=10,
+                    new_tokens=4,
                     threshes=[6,3,2],
                     # max_new_tokens=30,
-                    # use_cache=True,
-                    # do_sample=False,
-                    # expand=True,
-
                     max_seq_len=4096,
                     top_k=k,
                     kv_cache_manager=kv_cache,
+                    # use_cache=True,
+                    # do_sample=False,
+                    # expand = True
                 )
             end_time = time.time()
             total_time = end_time - start_time
-            n_tok += sum([len(line) for line in out]) - sum([len(line) for line in inp])
-            n_steps += nsteps
+            ntok += sum([len(line) for line in out]) - sum([len(line) for line in inp])
             # if k == 5:
             #     outs += [line.squeeze().tolist() for line in out]
 
@@ -194,8 +191,7 @@ for k in [1,2,4,8,16,32]:
         print("bsize =",bsize,"k =",k)
         for field in alltimes:
             print(field, "{:.2f}".format(alltimes[field]))
-        print("Ntok:", n_tok)
-        print("Nsteps:", n_steps)
+        print("Ntok:", ntok)
         # print(torch.cuda.max_memory_allocated()//1000000/1000)
         
 

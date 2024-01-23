@@ -243,9 +243,9 @@ class PagedAttentionCacheDataLayer(CacheDataLayer):
     def store(
         self, keys: torch.Tensor, values: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # k/v: 1 h n' d
+        # k/v: b h n d
         if self.unflatten_indices is not None:
-            # inp: 1 n' h d
+            # inp: 1 h n' d
             # inds: b k n
             keys = select_inflate_dim(keys[0].transpose(0,1), self.unflatten_indices) # b k n h d
             values = select_inflate_dim(values[0].transpose(0,1), self.unflatten_indices)
@@ -286,6 +286,8 @@ class PagedAttentionCacheData(CacheDataWithMetadata):
     head_size: int
     is_generating: bool
     sequence_ids: List[int]
+    unflatten_indices: Optional[torch.Tensor]
+    flatten_indices: Optional[torch.Tensor]
 
     def get_layer(self, layer_index: int) -> PagedAttentionCacheDataLayer:
         return PagedAttentionCacheDataLayer(
@@ -298,8 +300,8 @@ class PagedAttentionCacheData(CacheDataWithMetadata):
             num_heads=self.num_heads,
             head_size=self.head_size,
             is_generating=self.is_generating,
-            flatten_indices=None,
-            unflatten_indices=None,
+            flatten_indices=self.flatten_indices,
+            unflatten_indices=self.unflatten_indices,
         )
 
     def is_filled(self) -> bool:
@@ -640,6 +642,8 @@ class PagedKVCacheManager(KVCacheManager):
             head_size=self.head_size,
             is_generating=not is_prompt,
             sequence_ids=sequence_ids,
+            flatten_indices=None,
+            unflatten_indices=None,
         )
 
     def allocate_prompt_tokens(
