@@ -150,13 +150,14 @@ for k in [1,2,4,8,16,32]:
         alltimes = {}
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
+        n_tok = 0
         for j in range(20): #len(data) // bsize):
             seqs = data[j * bsize : j * bsize + bsize]
             max_seq = max(len(line) for line in seqs)
             inp = [torch.IntTensor(line).cuda() for line in seqs]
             with torch.no_grad():
                 start_time = time.time()
-                out, nsteps, generation_time, times = generate(
+                out, nsteps, generation_time, times = speculative_generate(
                     model,
                     inp,
                     test,
@@ -172,6 +173,7 @@ for k in [1,2,4,8,16,32]:
                 )
             end_time = time.time()
             total_time = end_time - start_time
+            n_tok += sum([len(line) for line in out]) - sum([len(line) for line in inp])
             # if k == 5:
             #     outs += [line.squeeze().tolist() for line in out]
 
@@ -190,6 +192,7 @@ for k in [1,2,4,8,16,32]:
         print("bsize =",bsize,"k =",k)
         for field in alltimes:
             print(field, "{:.2f}".format(alltimes[field]))
+        print("Ntok:", n_tok)
         # print(torch.cuda.max_memory_allocated()//1000000/1000)
         
 
