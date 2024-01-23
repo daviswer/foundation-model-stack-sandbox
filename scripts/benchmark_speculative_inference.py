@@ -151,7 +151,7 @@ for k in [1,2,4,8,16,32]:
         torch.cuda.reset_peak_memory_stats()
         n_tok = 0
         n_steps = 0
-        for j in range(20): #len(data) // bsize):
+        for j in range(10): #len(data) // bsize):
             seqs = data[j * bsize : j * bsize + bsize]
             max_seq = max(len(line) for line in seqs)
             inp = [torch.IntTensor(line).cuda() for line in seqs]
@@ -162,7 +162,7 @@ for k in [1,2,4,8,16,32]:
                     inp,
 
                     test,
-                    new_tokens=10,
+                    new_tokens=100,
                     threshes=[6,3,2],
                     # max_new_tokens=30,
                     # use_cache=True,
