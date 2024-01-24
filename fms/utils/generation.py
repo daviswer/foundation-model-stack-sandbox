@@ -367,13 +367,13 @@ def speculative_generate(
             [inputs.unsqueeze(1).expand(bsize, top_k, 1), adds], dim=-1
         ).int()  # b k 1+h
         
-        inputs = inputs.view(-1, n_adds) # bk 1+h
         if flatting:
-            flat_inputs, unflat_indices, flat_indices = flatten_batch(inputs) # b', b k 1+h
+            flat_inputs, unflat_indices, flat_indices = flatten_batch(inputs) # b', b k 1+h, b'
             flat_inputs = flat_inputs[None,] # 1 b'
             cache_data.unflatten_indices = unflat_indices
             cache_data.flatten_indices = flat_indices
             position_ids = select_inflate_dim(position_ids.view(-1), flat_indices)[None,]
+        inputs = inputs.view(-1, n_adds) # bk 1+h
         times["create_candidates"] += _time()-_start
 
         # Base model forward pass
@@ -392,7 +392,7 @@ def speculative_generate(
 
         # Check correctness of speculator predictions
         _start = _time()
-        test = inputs.view(-1, n_adds).roll(-1, 1).eq(next_vals).cumprod(1)
+        test = inputs.roll(-1, 1).eq(next_vals).cumprod(1)
         n_correct = (
             test.sum(1).clamp(0, n_adds - 1).view(bsize, top_k)
         )  # clamp in case pred[0]==targ[-1]
