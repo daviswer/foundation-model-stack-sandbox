@@ -396,7 +396,10 @@ class MultiHeadAttention(nn.Module):
         # q, k, v: batch_size x seq_len x emb_dim
         # mask: batch_size x seq_len x seq_len
         batch_size, q_len, _ = q.size()
-        kv_len = q_len
+        if is_self:
+            k = q
+            v = q
+        kv_len = k.size(1)
 
         # if kv_len mismatch, build new scan plan
         if kv_len != self.inp_len:
