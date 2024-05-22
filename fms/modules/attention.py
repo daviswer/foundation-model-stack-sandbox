@@ -404,12 +404,6 @@ class MultiHeadAttention(nn.Module):
             with torch.no_grad():
                 self.plan = get_scan_plan(k, self.fmap, self.cache_size)
 
-        # split emb_dim as nheads*emb_dim_per_head
-        # b x h x qlen x ds
-        queries = self.query(q).view(
-            batch_size, q_len, self.nheads, self.emb_kq_per_head
-        )
-
         # if this is self attention, we always recompute
         # cross attention only gets computed when a cache does not exist
         # if we dont have the cache yet, we need to compute
@@ -454,20 +448,6 @@ class MultiHeadAttention(nn.Module):
             else:
                 keys = past_key_value_state[0]
                 values = past_key_value_state[1]
-
-        # Merge rel pos bias and mask into single float mask
-        if mask is not None:
-            # Our expected mask format is bs x q_len x k_len, so to make it broadcastable
-            # we need to create the nheads dimension
-            while len(mask.size()) != 4:  # expects bs (x nheads) x q_len x kv_len
-                mask = mask.unsqueeze(1)
-
-        if self.position_encoder is not None:
-            attn_mask: Optional[Tensor] = self.position_encoder.adjusted_mask(
-                mask, queries, keys, past_key_value_state, use_cache
-            )
-        else:
-            attn_mask = mask
 
         # Expand kv so black-box attn will work
         expansion = self.nheads // self.kvheads
