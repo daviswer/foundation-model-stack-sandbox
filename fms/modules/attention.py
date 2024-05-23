@@ -522,7 +522,7 @@ class MultiHeadAttention(nn.Module):
             keys = keys.view(batch_size, kv_len, -1, 1)
             keys = F.pad(keys, (0, self.cache_size-1))  # b l hd 64
             keys = self.matscan(keys, gate)
-            keys = keys / keys.pow(2).mean(2, True).sqrt().add(1e-6)
+            # keys = keys / keys.pow(2).mean(2, True).sqrt().add(1e-6)
             keys = keys.unflatten(
                 2, (self.kvheads, self.emb_kq_per_head)
             )  # b l h d 64
@@ -531,7 +531,7 @@ class MultiHeadAttention(nn.Module):
             values = self.matscan(values, gate).unflatten(
                 2, (self.kvheads, self.emb_v_per_head)
             )  # b l h d 64
-            values = values / values.pow(2).mean(3, True).sqrt().add(1e-6)
+            # values = values / values.pow(2).mean(3, True).sqrt().add(1e-6)
             values = values.transpose(3,4)  # b l h 64 d
 
         # if you want to use caching and past_key_value_state is not None meaning you have values in your cache
