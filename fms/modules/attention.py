@@ -17,6 +17,62 @@ from fms.modules.positions import PositionEncoder
 from fms.modules.tp import TPModule
 
 
+def scan(state, g):
+    # state: b n d h
+    # g: 1/b n h h
+    state = state.clone()
+    g = g.clone()
+    s = state.size()
+    g0 = g.size(0)
+    logl = s[1].bit_length() - 1
+    # Up sweep: create ruler ticks
+    for i in range(logl):
+        span = 2**(i+1)
+        state = state.view(s[0], -1, span, *s[2:])  # b -1 span d h
+        g = g.view(g0, -1, span, s[3], s[3])  # 1 -1 span h h
+        newstate = state[:,:,span//2-1].matmul(g[:,:,-1])
+        newgate = g[:,:,span//2-1].matmul(g[:,:,-1])
+        state[:,:,-1] += newstate
+        g[:,:,-1] = newgate
+        
+    # Down sweep: fill in blanks
+    state = state.view(*s)
+    g = g.view(g0, s[1], s[3], s[3])
+    state = nn.functional.pad(state, (0,0,0,0,1,0))
+    g = nn.functional.pad(g, (0,0,0,0,1,0))[:,:-1]
+    remainder = state[:,-1:]
+    state = state[:,:-1]
+    for i in range(logl-1):
+        span = 2**(logl-i-1)
+        state = state.view(s[0], -1, span, *s[2:])  # b -1 span d h
+        g = g.view(g0, -1, span, s[3], s[3])  # b -1 span h h
+        state[:,:,span//2] = state[:,:,span//2] + state[:,:,0].matmul(g[:,:,span//2])
+        g[:,:,span//2] = g[:,:,0].matmul(g[:,:,span//2])
+    state = torch.cat([state.view(*s)[:,1:], remainder], dim=1)
+    return state
+
+
+class MatScan(torch.autograd.Function):
+    @staticmethod
+    def forward(state, gate):
+        return scan(state, gate)
+
+    @staticmethod
+    def setup_context(ctx, inputs, output):
+        state, gate = inputs
+        ctx.save_for_backward(gate)
+
+    @staticmethod
+    def backward(ctx, grad):
+        gate = ctx.saved_tensors[0]
+
+        # Gate-accumulate grads
+        gflip = gate.flip([1]).transpose(2,3)
+        gatesum = scan(grad.flip([1]), gflip.roll(1, dims=1)).flip([1])  # b n d h
+
+        return gatesum, None
+
+
 def get_scan_plan(x, fmap, h):
     # x: b n d
     # plan: for each level, which entries to avg from previous level ([l] n' 2)
@@ -315,6 +371,10 @@ class MultiHeadAttention(nn.Module):
         self.fmap = fmap
         self.cache_size = 64
 
+        self.scan_impl = True
+        if self.scan_impl:
+            self.register_buffer("gates", self.make_gates())
+
     def reset_parameters(self):
         for m in self.modules():
             if isinstance(m, nn.Linear):
@@ -326,6 +386,23 @@ class MultiHeadAttention(nn.Module):
 
     def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
         return TPMultiHeadAttention.import_module(self, group)
+    
+    def make_gates(self):
+        n = 1024  # Roughly, total cache window length (actually somewhat smaller)
+        d = self.cache_size
+        interval = sum([torch.arange(n).remainder(2**x).sub(2**x-1).sign().add(1) 
+                        for x in range(n.bit_length())])
+        m = torch.zeros(n,d,d)
+        for i in range(n):
+            key = self.fmap.get(interval[i].item(), d)
+            for j in range(key+1, d):
+                m[i,j,j] = 1
+            if key < d:
+                m[i,key,key] = .5**.5
+                m[i,key,key-1] = .5**.5
+            for j in range(1,min(key,d)):
+                m[i,j,j-1] = 1
+        return m.transpose(1,2)  # 1k d d
 
     def scan(self, x, plan, ln, i):
         """
@@ -402,7 +479,7 @@ class MultiHeadAttention(nn.Module):
         kv_len = k.size(1)
 
         # if kv_len mismatch, build new scan plan
-        if kv_len != self.inp_len:
+        if not self.scan_impl and kv_len != self.inp_len:
             self.inp_len = kv_len
             with torch.no_grad():
                 self.plan = get_scan_plan(k, self.fmap, self.cache_size)
@@ -433,11 +510,28 @@ class MultiHeadAttention(nn.Module):
 
         # Build telescoping cache
         # k/v: b l h d
-        keys = keys.view(batch_size, kv_len, -1)
-        keys = self.scan(keys, self.plan, self.ln_k, 3).unflatten(
-            2, (self.kvheads, self.emb_kq_per_head)
-        )  # b l h d 64
-        values = self.scan(values, self.plan, self.ln_v, 3)  # b l h 64 d
+        if not self.scan_impl:
+            keys = keys.view(batch_size, kv_len, -1)
+            keys = self.scan(keys, self.plan, self.ln_k, 3).unflatten(
+                2, (self.kvheads, self.emb_kq_per_head)
+            )  # b l h d 64
+            values = self.scan(values, self.plan, self.ln_v, 3)  # b l h 64 d
+        else:
+            gate = self.gates.repeat(4,1,1)[None]  # 1 l 64 64
+            keys = keys.view(batch_size, kv_len, -1, 1)
+            keys = F.pad(keys, (0, self.cache_size-1))  # b l hd 64
+            keys = self.scan(keys, gate)
+            keys = keys / keys.pow(2).mean(2, True).sqrt().add(1e-6)
+            keys = keys.unsqueeze(
+                2, (self.kvheads, self.emb_kq_per_head)
+            )  # b l h d 64
+            values = values.view(batch_size, kv_len, -1, 1)
+            values = F.pad(values, (0, self.cache_size-1))  # b l hd 64
+            values = self.scan(values, gate).unsqueeze(
+                2, (self.kvheads, self.emb_v_per_head)
+            )  # b l h d 64
+            values = values / values.pow(2).mean(3, True).sqrt().add(1e-6)
+            values = values.transpose(3,4)  # b l h 64 d
 
         # if you want to use caching and past_key_value_state is not None meaning you have values in your cache
         if (
