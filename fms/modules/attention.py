@@ -523,12 +523,12 @@ class MultiHeadAttention(nn.Module):
             keys = F.pad(keys, (0, self.cache_size-1))  # b l hd 64
             keys = self.matscan(keys, gate)
             keys = keys / keys.pow(2).mean(2, True).sqrt().add(1e-6)
-            keys = keys.unsqueeze(
+            keys = keys.unflatten(
                 2, (self.kvheads, self.emb_kq_per_head)
             )  # b l h d 64
             values = values.view(batch_size, kv_len, -1, 1)
             values = F.pad(values, (0, self.cache_size-1))  # b l hd 64
-            values = self.matscan(values, gate).unsqueeze(
+            values = self.matscan(values, gate).unflatten(
                 2, (self.kvheads, self.emb_v_per_head)
             )  # b l h d 64
             values = values / values.pow(2).mean(3, True).sqrt().add(1e-6)
