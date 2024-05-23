@@ -371,7 +371,7 @@ class MultiHeadAttention(nn.Module):
         self.fmap = fmap
         self.cache_size = 64
 
-        self.scan_impl = True
+        self.scan_impl = False
         if self.scan_impl:
             self.register_buffer("gates", self.make_gates())
             self.matscan = MatScan.apply
