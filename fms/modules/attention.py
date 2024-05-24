@@ -358,7 +358,7 @@ class MultiHeadAttention(nn.Module):
             self.attn_dropout = nn.Dropout(self.p_dropout)
         self.position_encoder = position_encoder
         self.ln_k = LayerNormParameterized(
-            kvheads * emb_kq, use_high_precision_pow=True
+            emb_kq, use_high_precision_pow=True
         )
         self.ln_v = LayerNormParameterized(emb_v, use_high_precision_pow=True)
 
@@ -523,10 +523,8 @@ class MultiHeadAttention(nn.Module):
         # k/v: b l h d
         w = self.w(k).unsqueeze(-1)  # b l h 1
         if not self.scan_impl:
-            keys = keys.view(batch_size, kv_len, -1)
-            keys = self.scan(keys, self.plan, self.ln_k, 3, w).unflatten(
-                2, (self.kvheads, self.emb_kq_per_head)
-            )  # b l h d 64
+            # keys = keys.view(batch_size, kv_len, -1)
+            keys = self.scan(keys, self.plan, self.ln_k, 4, w)  # b l h d 64
             values = self.scan(values, self.plan, self.ln_v, 3, w)  # b l h 64 d
         else:
             gate = self.gates.repeat(4,1,1)[None]  # 1 l 64 64
