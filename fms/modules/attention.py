@@ -435,7 +435,7 @@ class MultiHeadAttention(nn.Module):
             if weighted:
                 weights = weights.index_select(1, plan[j].view(-1)).view(s[0], -1, 2, *ws[2:])
                 weights_ = weights.softmax(dim=2)
-                weights = weights.mul(weights_).sum(2)
+                weights = weights.logsumexp(2)
             cache[j] = (
                 cache[j - 1]
                 .index_select(1, plan[j].view(-1))
