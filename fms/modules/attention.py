@@ -376,6 +376,8 @@ class MultiHeadAttention(nn.Module):
             self.register_buffer("gates", self.make_gates())
             self.matscan = MatScan.apply
 
+        self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
+
     def reset_parameters(self):
         for m in self.modules():
             if isinstance(m, nn.Linear):
@@ -405,7 +407,7 @@ class MultiHeadAttention(nn.Module):
                 m[i,j,j-1] = 1
         return m.transpose(1,2)  # 1k d d
 
-    def scan(self, x, plan, ln, i):
+    def scan(self, x, plan, ln, i, w):
         """
         Takes input x of shape [b n ...] and scan plan, computes recursive sums, and
         extracts cache values into the dimension specified by i > 1.
@@ -414,6 +416,7 @@ class MultiHeadAttention(nn.Module):
         """
         assert i > 1, "Output must maintain batch and seqlen in first two dimensions"
         s = x.size()
+        ws = w.size()
         inds = plan[-1]  # n h
         plan = plan[:-1]
         # Plan and inds are formed, construct cache via recursive sums
@@ -421,14 +424,21 @@ class MultiHeadAttention(nn.Module):
         cache[1] = nn.functional.pad(x.view(s[0], s[1], -1), (0, 0, 1, 0)).view(
             s[0], s[1] + 1, *s[2:]
         )  # b n ... d
+        weights = nn.functional.pad(w.view(s[0], s[1], -1), (0,0,1,0), value=-1000).view(
+            s[0], s[1] + 1, *ws[2:]
+        )
         for j in range(2, len(cache)):
+            weights = weights.index_select(1, plan[j].view(-1)).view(s[0], -1, 2, *ws[2:])
+            weights_ = weights.softmax(dim=2)
             cache[j] = (
                 cache[j - 1]
                 .index_select(1, plan[j].view(-1))
                 .view(s[0], -1, 2, *s[2:])
+                .mul(weights_)
                 .sum(2)
-                .div(2**0.5)
+                # .div(2**0.5)
             )
+            weights = weights.mul(weights_).sum(2)
         cache = torch.cat(cache[1:], dim=1)  # b n' ...d
         cache = ln(cache)
         cache = cache.unsqueeze(i).expand(
@@ -511,12 +521,13 @@ class MultiHeadAttention(nn.Module):
 
         # Build telescoping cache
         # k/v: b l h d
+        w = self.w(k).unsqueeze(-1)  # b l h 1
         if not self.scan_impl:
             keys = keys.view(batch_size, kv_len, -1)
-            keys = self.scan(keys, self.plan, self.ln_k, 3).unflatten(
+            keys = self.scan(keys, self.plan, self.ln_k, 3, w).unflatten(
                 2, (self.kvheads, self.emb_kq_per_head)
             )  # b l h d 64
-            values = self.scan(values, self.plan, self.ln_v, 3)  # b l h 64 d
+            values = self.scan(values, self.plan, self.ln_v, 3, w)  # b l h 64 d
         else:
             gate = self.gates.repeat(4,1,1)[None]  # 1 l 64 64
             keys = keys.view(batch_size, kv_len, -1, 1)
