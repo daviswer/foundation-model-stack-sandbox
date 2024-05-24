@@ -376,7 +376,7 @@ class MultiHeadAttention(nn.Module):
             self.register_buffer("gates", self.make_gates())
             self.matscan = MatScan.apply
 
-        self.weighted = True
+        self.weighted = False
         if self.weighted:
             self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
 
