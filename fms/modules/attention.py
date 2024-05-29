@@ -430,7 +430,7 @@ class MultiHeadAttention(nn.Module):
         cache = [None for _ in plan]
         cache[1] = nn.functional.pad(x.view(s[0], s[1], -1), (0, 0, 1, 0)).view(
             s[0], s[1] + 1, *s[2:]
-        )  # b n ... d
+        )  # b n ...
         for j in range(2, len(cache)):
             if weighted:
                 weights = weights.index_select(1, plan[j].view(-1)).view(s[0], -1, 2, *ws[2:])
@@ -446,7 +446,7 @@ class MultiHeadAttention(nn.Module):
             else:
                 cache[j] = cache[j].sum(2).div(2**0.5)
             
-        cache = torch.cat(cache[1:], dim=1)  # b n' ...d
+        cache = torch.cat(cache[1:], dim=1)  # b n' ...
         cache = ln(cache)
         cache = cache.unsqueeze(i).expand(
             *[-1] * i, inds.size(-1), *[-1] * (len(s) - i)
