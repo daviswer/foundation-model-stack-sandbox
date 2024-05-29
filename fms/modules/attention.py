@@ -371,14 +371,9 @@ class MultiHeadAttention(nn.Module):
         self.fmap = fmap
         self.cache_size = 64
 
-        self.scan_impl = False
-        if self.scan_impl:
-            self.register_buffer("gates", self.make_gates())
-            self.matscan = MatScan.apply
+        self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
 
-        self.weighted = False
-        if self.weighted:
-            self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
+        self.step = 0
 
     def reset_parameters(self):
         for m in self.modules():
@@ -392,70 +387,34 @@ class MultiHeadAttention(nn.Module):
     def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
         return TPMultiHeadAttention.import_module(self, group)
     
-    def make_gates(self):
-        n = 1024  # Roughly, total cache window length (actually somewhat smaller)
-        d = self.cache_size
-        interval = sum([torch.arange(n).remainder(2**x).sub(2**x-1).sign().add(1) 
-                        for x in range(n.bit_length())])
-        m = torch.zeros(n,d,d)
-        for i in range(n):
-            key = self.fmap.get(interval[i].item(), d)
-            for j in range(key+1, d):
-                m[i,j,j] = 1
-            if key < d:
-                m[i,key,key] = .5**.5
-                m[i,key,key-1] = .5**.5
-            for j in range(1,min(key,d)):
-                m[i,j,j-1] = 1
-        return m.transpose(1,2)  # 1k d d
-
-    def scan(self, x, plan, ln, i, w=None):
-        """
-        Takes input x of shape [b n ...] and scan plan, computes recursive sums, and
-        extracts cache values into the dimension specified by i > 1.
-        Final output shape is therefore [b n ... c ...] with c the cache size.
-        Applies specified LN to cache, so LN size should match x.size(-1).
-        """
-        assert i > 1, "Output must maintain batch and seqlen in first two dimensions"
-        s = x.size()
-        weighted = w is not None
-        if weighted:
-            ws = w.size()
-            weights = nn.functional.pad(w.view(s[0], s[1], -1), (0,0,1,0), value=-1000).view(
-                s[0], s[1] + 1, *ws[2:]
-            )
-        inds = plan[-1]  # n h
-        plan = plan[:-1]
-        # Plan and inds are formed, construct cache via recursive sums
-        cache = [None for _ in plan]
-        cache[1] = nn.functional.pad(x.view(s[0], s[1], -1), (0, 0, 1, 0)).view(
-            s[0], s[1] + 1, *s[2:]
-        )  # b n ... d
-        for j in range(2, len(cache)):
-            if weighted:
-                weights = weights.index_select(1, plan[j].view(-1)).view(s[0], -1, 2, *ws[2:])
-                weights_ = weights.softmax(dim=2)
-                weights = weights.logsumexp(2)
-            cache[j] = (
-                cache[j - 1]
-                .index_select(1, plan[j].view(-1))
-                .view(s[0], -1, 2, *s[2:])
-            )
-            if weighted:
-                cache[j] = cache[j].mul(weights_).sum(2)
-            else:
-                cache[j] = cache[j].sum(2).div(2**0.5)
-            
-        cache = torch.cat(cache[1:], dim=1)  # b n' ...d
-        cache = ln(cache)
-        cache = cache.unsqueeze(i).expand(
-            *[-1] * i, inds.size(-1), *[-1] * (len(s) - i)
-        )  # b n' ... h ...
-        inds = inds.view(
-            1, inds.size(0), *[1] * (i - 2), inds.size(1), *[1] * (len(s) - i)
-        )  # b n 111 h 111
-        inds = inds.expand(s[0], -1, *s[2:i], -1, *s[i:])  # b n ... h ...
-        return cache.gather(1, inds)  # b n ... h ...
+    def advance(self, cache, weights, x, w):
+        # cache: b h c d
+        # weights: b h c
+        # x: b h d
+        # w: b h
+        c = self.cache_size
+        powers = (2**torch.arange(8, device=cache.device))
+        ilevel = (self.step%powers).sub(powers-1).sign().add(1).sum().item()
+        key = self.fmap.get(ilevel, c)
+        if key == c:
+            cache = torch.cat([x.unsqueeze(-1), cache[:,:,:-1]], dim=2)
+            weights = torch.cat([w.unsqueeze(-1), weights[:,:,:-1]], dim=2)
+        else:
+            lse = weights[:,:,key-1:key+1].logsumexp(2, True)  # b h 1
+            mix = weights[:,:,key-1:key+1].sub(lse).exp()  # b h 2
+            cache = torch.cat([
+                x.unsqueeze(2),
+                cache[:,:,:key-1],
+                cache[:,:,key-1:key+1].mul(mix.unsqueeze(3)).sum(2, True),
+                cache[:,:,key+1:],
+            ], dim=2)  # b h c d
+            weights = torch.cat([
+                w.unsqueeze(2),
+                weights[:,:,:key-1],
+                weights[:,:,key-1:key+1].mul(mix).sum(2, True),
+                weights[:,:,key+1:],
+            ], dim=2)
+        return cache, weights
 
     def forward(
         self,
@@ -488,99 +447,95 @@ class MultiHeadAttention(nn.Module):
             returned in the form (hidden_state, cache) where hidden_state is a tensor and cache is of the form specified
             in past_key_value_state
         """
-        # q, k, v: batch_size x seq_len x emb_dim
-        # mask: batch_size x seq_len x seq_len
+        
+        '''
+        CHECK QLEN
+        IF QLEN > 1:
+            ZERO CACHE + WEIGHTS
+            ZERO STEP
+            FOR STEP IN QLEN
+                ADVANCE
+        ELSE
+            ADVANCE
+        '''
         batch_size, q_len, _ = q.size()
-        if is_self:
-            k = q
-            v = q
-        kv_len = k.size(1)
+        q_out, k_out, v_out = self.in_proj(q, k, v)
+        
+        # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
+        queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
+        keys = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
+        values = v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
 
-        # if kv_len mismatch, build new scan plan
-        if not self.scan_impl and kv_len != self.inp_len:
-            self.inp_len = kv_len
-            with torch.no_grad():
-                self.plan = get_scan_plan(k, self.fmap, self.cache_size)
-
-        # if this is self attention, we always recompute
-        # cross attention only gets computed when a cache does not exist
-        # if we dont have the cache yet, we need to compute
-        # d x (h x ds)
-        # b x kvlen x d
-        # b x kvlen x h x ds
-        # b x h x kvlen x ds
-        # todo: Cross attention (This always is true for now)
-        if is_self or past_key_value_state is None:
-            q_out, k_out, v_out = self.in_proj(q, k, v)
-
-            # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
-            queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
-            keys = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
-            values = v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
-
-            # You want to apply rotary embeddings pre-cache
-            if self.position_encoder is not None:
-                queries, keys = self.position_encoder.adjusted_qk(
-                    queries, keys, position_ids, past_key_value_state, use_cache
-                )
-
+        # You want to apply rotary embeddings pre-cache
+        if self.position_encoder is not None:
+            if q_len == 1 and position_ids is None:
+                position_ids = torch.ones(batch_size, q_len, device=q.device).mul(self.step).int()
+            queries, keys = self.position_encoder.adjusted_qk(
+                queries, keys, position_ids, past_key_value_state, use_cache
+            )
+        
         queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
+        w = self.w(q)  # b l h
 
-        # Build telescoping cache
-        # k/v: b l h d
-        w = None
-        if self.weighted:
-            w = self.w(k).unsqueeze(-1)  # b l h 1
-        if not self.scan_impl:
-            # keys = keys.view(batch_size, kv_len, -1)
-            keys = self.scan(keys, self.plan, self.ln_k, 4, w)  # b l h d 64
-            values = self.scan(values, self.plan, self.ln_v, 3, w)  # b l h 64 d
+        # Advance caches
+        if q_len == 1:
+            past_key_value_state[0], past_key_value_state[2] = self.advance(
+                past_key_value_state[0][:,0], 
+                past_key_value_state[2][:,0], 
+                keys.squeeze(1),  # b h d
+                w.squeeze(1),  # b h 
+            )
+            past_key_value_state[1], past_key_value_state[3] = self.advance(
+                past_key_value_state[1][:,0],
+                past_key_value_state[3][:,0],
+                values.squeeze(1),  # b h d
+                w.squeeze(1),  # b h
+            )
+            past_key_value_state = [x.unsqueeze(1) for x in past_key_value_state]
         else:
-            gate = self.gates.repeat(4,1,1)[None]  # 1 l 64 64
-            keys = keys.view(batch_size, kv_len, -1, 1)
-            keys = F.pad(keys, (0, self.cache_size-1))  # b l hd 64
-            keys = self.matscan(keys, gate)
-            # keys = keys / keys.pow(2).mean(2, True).sqrt().add(1e-6)
-            keys = keys.unflatten(
-                2, (self.kvheads, self.emb_kq_per_head)
-            )  # b l h d 64
-            values = values.view(batch_size, kv_len, -1, 1)
-            values = F.pad(values, (0, self.cache_size-1))  # b l hd 64
-            values = self.matscan(values, gate).unflatten(
-                2, (self.kvheads, self.emb_v_per_head)
-            )  # b l h d 64
-            # values = values / values.pow(2).mean(3, True).sqrt().add(1e-6)
-            values = values.transpose(3,4)  # b l h 64 d
+            # zero cache and weights
+            past_key_value_state = [
+                torch.zeros(batch_size, q_len+1, self.kvheads, self.cache_size, self.emb_kq_per_head, device=q.device),
+                torch.zeros(batch_size, q_len+1, self.kvheads, self.cache_size, self.emb_kq_per_head, device=q.device),
+                torch.ones(batch_size, q_len+1, self.kvheads, self.cache_size, device=q.device).mul(-1000),
+                torch.ones(batch_size, q_len+1, self.kvheads, self.cache_size, device=q.device).mul(-1000),
+            ]
+            self.step = 0
+            # advance n times
+            for i in range(q_len):
+                past_key_value_state[0][:,i+1], past_key_value_state[2][:,i+1] = self.advance(
+                    past_key_value_state[0][:,i], 
+                    past_key_value_state[2][:,i], 
+                    keys[:,i],  # b h d
+                    w[:,i],  # b h 
+                )
+                past_key_value_state[1][:,i+1], past_key_value_state[3][:,i+1] = self.advance(
+                    past_key_value_state[1][:,i],
+                    past_key_value_state[3][:,i],
+                    values[:,i],  # b h d
+                    w[:,i],  # b h
+                )
+            past_key_value_state = [x[:,1:] for x in past_key_value_state]
+        
+        # Advance step counter
+        self.step += q_len
 
-        # if you want to use caching and past_key_value_state is not None meaning you have values in your cache
-        if (
-            use_cache
-            and past_key_value_state is not None
-            and past_key_value_state[0].numel() > 0
-        ):
-            if is_self:
-                keys = torch.cat((past_key_value_state[0], keys), dim=2)
-                values = torch.cat((past_key_value_state[1], values), dim=2)
-            else:
-                keys = past_key_value_state[0]
-                values = past_key_value_state[1]
-
-        # Expand kv so black-box attn will work
-        expansion = self.nheads // self.kvheads
-        queries = queries.unflatten(2, (self.kvheads, expansion))  # b l h e d
-
-        # b l h e d, b l h d 64
-        attn = queries.matmul(keys)  # b l h e 64
+        # Do attention against caches
+        # q: b l h e d
+        # k: b l h c d
+        # v: b l h c d
+        keys = self.ln_k(past_key_value_state[0])
+        values = self.ln_v(past_key_value_state[1])
+        queries = queries.view(batch_size, q_len, self.kvheads, -1, self.emb_kq_per_head)
+        attn = queries.matmul(keys.transpose(3,4))  # b l h e c
         attn = attn.softmax(4)
-        # b l h e 64, b l h 64 d
         attn = attn.matmul(values)  # b l h e d
 
         attn = attn.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
         out = self.dense(attn)
 
-        # if use_cache=True, we return the hidden_state as well as the kv cache
         if use_cache:
-            return out, (keys, values)
+            return out, [x[:,-1:] for x in past_key_value_state]
         else:
             return out
 
