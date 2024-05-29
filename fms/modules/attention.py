@@ -17,120 +17,6 @@ from fms.modules.positions import PositionEncoder
 from fms.modules.tp import TPModule
 
 
-def scan(state, g):
-    # state: b n d h
-    # g: 1/b n h h
-    state = state.clone()
-    g = g.clone()
-    s = state.size()
-    g0 = g.size(0)
-    logl = s[1].bit_length() - 1
-    # Up sweep: create ruler ticks
-    for i in range(logl):
-        span = 2**(i+1)
-        state = state.view(s[0], -1, span, *s[2:])  # b -1 span d h
-        g = g.view(g0, -1, span, s[3], s[3])  # 1 -1 span h h
-        newstate = state[:,:,span//2-1].matmul(g[:,:,-1])
-        newgate = g[:,:,span//2-1].matmul(g[:,:,-1])
-        state[:,:,-1] += newstate
-        g[:,:,-1] = newgate
-        
-    # Down sweep: fill in blanks
-    state = state.view(*s)
-    g = g.view(g0, s[1], s[3], s[3])
-    state = nn.functional.pad(state, (0,0,0,0,1,0))
-    g = nn.functional.pad(g, (0,0,0,0,1,0))[:,:-1]
-    remainder = state[:,-1:]
-    state = state[:,:-1]
-    for i in range(logl-1):
-        span = 2**(logl-i-1)
-        state = state.view(s[0], -1, span, *s[2:])  # b -1 span d h
-        g = g.view(g0, -1, span, s[3], s[3])  # b -1 span h h
-        state[:,:,span//2] = state[:,:,span//2] + state[:,:,0].matmul(g[:,:,span//2])
-        g[:,:,span//2] = g[:,:,0].matmul(g[:,:,span//2])
-    state = torch.cat([state.view(*s)[:,1:], remainder], dim=1)
-    return state
-
-
-class MatScan(torch.autograd.Function):
-    @staticmethod
-    def forward(state, gate):
-        return scan(state, gate)
-
-    @staticmethod
-    def setup_context(ctx, inputs, output):
-        state, gate = inputs
-        ctx.save_for_backward(gate)
-
-    @staticmethod
-    def backward(ctx, grad):
-        gate = ctx.saved_tensors[0]
-
-        # Gate-accumulate grads
-        gflip = gate.flip([1]).transpose(2,3)
-        gatesum = scan(grad.flip([1]), gflip.roll(1, dims=1)).flip([1])  # b n d h
-
-        return gatesum, None
-
-
-def get_scan_plan(x, fmap, h):
-    # x: b n d
-    # plan: for each level, which entries to avg from previous level ([l] n' 2)
-    # inds: which level and entry to pull from in populating heads (n h 2) -> (n h)
-    b, n, d = x.size()
-    # Form ruler-tick progression sequence
-    levels = sum(
-        [
-            torch.arange(n, device=x.device)
-            .remainder(2**i)
-            .sub(2**i - 1)
-            .sign()
-            .add(1)
-            for i in range(n.bit_length())
-        ]
-    ).roll(1, 0)
-    plan = [
-        torch.zeros(0, 2, device=x.device, dtype=torch.int)
-        for _ in range(len(fmap) + 2)
-    ]  # [l] 0 2
-    plan[1] = (
-        torch.arange(x.size(1) + 1, device=x.device, dtype=torch.int)
-        .unsqueeze(1)
-        .expand(-1, 2)
-    )
-    inds = torch.zeros(n, h, 2, device=x.device, dtype=torch.long)  # n h 2
-    inds[:, 0, 1] = torch.arange(n, device=inds.device, dtype=inds.dtype) + 1
-    inds[:, :, 0] = 1
-    ilist = list(range(1, n))
-    for i in ilist:
-        m = fmap.get(levels[i].item(), h)
-        inds[i, 1:m] = inds[i - 1, : m - 1]
-        if m < h:
-            inds[i, m + 1 :] = inds[i - 1, m + 1 :]
-            prev = inds[i - 1, m - 1 : m + 1].flip([0])  # 2 2
-            assert prev[0, 0] == min(levels[i], len(fmap) + 1) or prev[0, 1] == 0, (
-                levels[i],
-                prev[0, 0],
-            )
-            assert prev[1, 0] == min(levels[i], len(fmap) + 1) or prev[1, 1] == 0, (
-                levels[i],
-                prev[1, 0],
-            )
-            level = plan[levels[i] + 1]
-            inds[i, m, 0] = levels[i] + 1
-            inds[i, m, 1] = level.size(0)
-            plan[levels[i] + 1] = torch.cat(
-                [plan[levels[i] + 1], prev[:, 1][None]], dim=0
-            )
-    # Flatten inds (indexing into flattened plan/cache) (n h)
-    ls = [p.size(0) for p in plan]
-    ls = [0] + ls[:-1]
-    offset = torch.tensor(ls, device=inds.device).cumsum(0)
-    offset = offset[inds[:, :, 0]]
-    inds = offset + inds[:, :, 1]
-    return plan + [inds]
-
-
 class QKV(nn.Module, metaclass=abc.ABCMeta):
     """Simple module for applying qkv in attention"""
 
@@ -397,8 +283,8 @@ class MultiHeadAttention(nn.Module):
         ilevel = (self.step%powers).sub(powers-1).sign().add(1).sum().item()
         key = self.fmap.get(ilevel, c)
         if key == c:
-            cache = torch.cat([x.unsqueeze(-1), cache[:,:,:-1]], dim=2)
-            weights = torch.cat([w.unsqueeze(-1), weights[:,:,:-1]], dim=2)
+            cache = torch.cat([x.unsqueeze(2), cache[:,:,:-1]], dim=2)
+            weights = torch.cat([w.unsqueeze(2), weights[:,:,:-1]], dim=2)
         else:
             lse = weights[:,:,key-1:key+1].logsumexp(2, True)  # b h 1
             mix = weights[:,:,key-1:key+1].sub(lse).exp()  # b h 2
