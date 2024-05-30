@@ -149,7 +149,7 @@ if args.compile:
     model = torch.compile(model, mode=args.compile_mode)
 
 
-lm_obj = evaluation.FMSEvalHarnessLM(model=model, tokenizer=tokenizer, device=device, local_rank=local_rank)
+lm_obj = evaluation.FMSEvalHarnessLM(model=model, tokenizer=tokenizer, device=device, rank=local_rank)
 
 lm_eval.tasks.initialize_tasks()
 
