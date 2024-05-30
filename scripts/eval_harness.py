@@ -7,7 +7,7 @@ import torch._inductor.config
 from lm_eval.utils import make_table
 from torch import distributed as dist
 
-from fms.models import get_model
+from fms.models.llama import LLaMA, LLaMAConfig
 from fms.utils import evaluation, tokenizers
 
 
@@ -119,15 +119,23 @@ else:
     else:
         distr_param = None
 
-model = get_model(
-    args.architecture,
-    args.variant,
-    model_path=args.model_path,
-    device_type=args.device_type,
-    source=args.model_source,
-    distributed_strategy=distr_param,
-    group=dist.group.WORLD,
+# model = get_model(
+#     args.architecture,
+#     args.variant,
+#     model_path=args.model_path,
+#     device_type=args.device_type,
+#     source=args.model_source,
+#     distributed_strategy=distr_param,
+#     group=dist.group.WORLD,
+# )
+c = LLaMAConfig(
+    nlayers=24,
+    nheads=16,
+    kvheads=4,
+    emb_dim=2048,
+    hidden_grow_factor=3
 )
+model = LLaMA(c)
 tokenizer = tokenizers.get_tokenizer(args.tokenizer)
 model.eval()
 torch.set_grad_enabled(False)
