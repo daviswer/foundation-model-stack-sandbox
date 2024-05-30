@@ -283,23 +283,17 @@ class MultiHeadAttention(nn.Module):
         ilevel = (self.step%powers).sub(powers-1).sign().add(1).sum().item()
         key = self.fmap.get(ilevel, c)
         if key == c:
-            cache = torch.cat([x.unsqueeze(2), cache[:,:,:-1]], dim=2)
-            weights = torch.cat([w.unsqueeze(2), weights[:,:,:-1]], dim=2)
+            cache = cache.roll(1, dims=(2))
+            weights = weights.roll(1, dims=(2))
         else:
             lse = weights[:,:,key-1:key+1].logsumexp(2, True)  # b h 1
             mix = weights[:,:,key-1:key+1].sub(lse).exp()  # b h 2
-            cache = torch.cat([
-                x.unsqueeze(2),
-                cache[:,:,:key-1],
-                cache[:,:,key-1:key+1].mul(mix.unsqueeze(3)).sum(2, True),
-                cache[:,:,key+1:],
-            ], dim=2)  # b h c d
-            weights = torch.cat([
-                w.unsqueeze(2),
-                weights[:,:,:key-1],
-                weights[:,:,key-1:key+1].mul(mix).sum(2, True),
-                weights[:,:,key+1:],
-            ], dim=2)
+            cache[:,:,key] = cache[:,:,key-1:key+1].mul(mix.unsqueeze(3)).sum(2)
+            cache[:,:,1:key] = cache[:,:,:key-1]
+            weights[:,:,key] = weights[:,:,key-1:key+1].mul(mix).sum(2)
+            weights[:,:,1:key] = weights[:,:,:key-1]
+        cache[:,:,0] = x
+        weights[:,:,0] = w
         return cache, weights
 
     def forward(
