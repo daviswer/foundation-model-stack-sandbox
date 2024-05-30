@@ -135,7 +135,7 @@ c = LLaMAConfig(
     emb_dim=2048,
     hidden_grow_factor=3
 )
-model = LLaMA(c).do(device)
+model = LLaMA(c).to(device)
 tokenizer = tokenizers.get_tokenizer(args.tokenizer)
 model.eval()
 torch.set_grad_enabled(False)
