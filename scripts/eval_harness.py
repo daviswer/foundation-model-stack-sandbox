@@ -148,8 +148,13 @@ if args.compile:
     # compiling can make first inference pass slow
     model = torch.compile(model, mode=args.compile_mode)
 
-
-lm_obj = evaluation.FMSEvalHarnessLM(model=model, tokenizer=tokenizer, device=device, rank=local_rank)
+lm_obj = evaluation.FMSEvalHarnessLM(
+    model=model, 
+    tokenizer=tokenizer, 
+    device=device, 
+    rank=local_rank, 
+    world_size=world_size,
+)
 
 lm_eval.tasks.initialize_tasks()
 
