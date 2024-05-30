@@ -12,7 +12,6 @@ from fms.distributed.tensorparallel import (
     copy_to_tensor_model_parallel_region,
     reduce_from_tensor_model_parallel_region,
 )
-from fms.modules.layernorm import LayerNormParameterized
 from fms.modules.positions import PositionEncoder
 from fms.modules.tp import TPModule
 
@@ -243,23 +242,12 @@ class MultiHeadAttention(nn.Module):
         if self.p_dropout:
             self.attn_dropout = nn.Dropout(self.p_dropout)
         self.position_encoder = position_encoder
-        self.ln_k = LayerNormParameterized(
-            emb_kq, use_high_precision_pow=True
+        # Avoiding graph breaks
+        self.previous_flash: bool = torch.backends.cuda.flash_sdp_enabled()
+        self.previous_mem_efficient: bool = (
+            torch.backends.cuda.mem_efficient_sdp_enabled()
         )
-        self.ln_v = LayerNormParameterized(emb_v, use_high_precision_pow=True)
-
-        self.inp_len = 0
-        self.plan = None
-
-        fmap = {8 - i: 64 - (i) ** 2 for i in range(8)}
-        fmap.pop(8)
-        fmap.pop(7)
-        self.fmap = fmap
-        self.cache_size = 64
-
-        self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
-
-        self.step = 0
+        self.previous_math: bool = torch.backends.cuda.math_sdp_enabled()
 
     def reset_parameters(self):
         for m in self.modules():
@@ -267,40 +255,11 @@ class MultiHeadAttention(nn.Module):
                 nn.init.trunc_normal_(m.weight, mean=0.0, std=0.02)
                 if self.use_bias:
                     m.bias.data.zero_()
-            elif isinstance(m, LayerNormParameterized) or isinstance(m, QKV):
+            elif isinstance(m, QKV):
                 m.reset_parameters()
 
     def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
         return TPMultiHeadAttention.import_module(self, group)
-    
-    def advance(self, cache, weights, x, w):
-        # cache: b h c d
-        # weights: b h c
-        # x: b h d
-        # w: b h
-        c = self.cache_size
-        powers = (2**torch.arange(8, device=cache.device))
-        ilevel = (self.step%powers).sub(powers-1).sign().add(1).sum().item()
-        key = self.fmap.get(ilevel, c)
-        if key == c:
-            cache = torch.cat([x.unsqueeze(2), cache[:,:,:-1]], dim=2)
-            weights = torch.cat([w.unsqueeze(2), weights[:,:,:-1]], dim=2)
-        else:
-            lse = weights[:,:,key-1:key+1].logsumexp(2, True)  # b h 1
-            mix = weights[:,:,key-1:key+1].sub(lse).exp()  # b h 2
-            cache = torch.cat([
-                x.unsqueeze(2),
-                cache[:,:,:key-1],
-                cache[:,:,key-1:key+1].mul(mix.unsqueeze(3)).sum(2, True),
-                cache[:,:,key+1:],
-            ], dim=2)  # b h c d
-            weights = torch.cat([
-                w.unsqueeze(2),
-                weights[:,:,:key-1],
-                weights[:,:,key-1:key+1].mul(mix).sum(2, True),
-                weights[:,:,key+1:],
-            ], dim=2)
-        return cache, weights
 
     def forward(
         self,
@@ -333,95 +292,113 @@ class MultiHeadAttention(nn.Module):
             returned in the form (hidden_state, cache) where hidden_state is a tensor and cache is of the form specified
             in past_key_value_state
         """
-        
-        '''
-        CHECK QLEN
-        IF QLEN > 1:
-            ZERO CACHE + WEIGHTS
-            ZERO STEP
-            FOR STEP IN QLEN
-                ADVANCE
-        ELSE
-            ADVANCE
-        '''
+        # q, k, v: batch_size x seq_len x emb_dim
+        # mask: batch_size x seq_len x seq_len
         batch_size, q_len, _ = q.size()
-        q_out, k_out, v_out = self.in_proj(q, k, v)
-        
-        # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
-        queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
-        keys = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
-        values = v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
 
-        # You want to apply rotary embeddings pre-cache
+        # if this is self attention, we always recompute
+        # cross attention only gets computed when a cache does not exist
+        # if we dont have the cache yet, we need to compute
+        # d x (h x ds)
+        # b x kvlen x d
+        # b x kvlen x h x ds
+        # b x h x kvlen x ds
+        # todo: Cross attention (This always is true for now)
+        if is_self or past_key_value_state is None:
+            q_out, k_out, v_out = self.in_proj(q, k, v)
+
+            # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
+            queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
+            keys = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
+            values = v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
+
+            # You want to apply rotary embeddings pre-cache
+            if self.position_encoder is not None:
+                queries, keys = self.position_encoder.adjusted_qk(
+                    queries, keys, position_ids, past_key_value_state, use_cache
+                )
+
+        queries = queries.transpose(2, 1)  # / (self.emb_kq_per_head**(1/4))
+        keys = keys.transpose(2, 1)  # / (self.emb_kq_per_head**(1/4))
+        values = values.transpose(2, 1)  # compatible with QK.T
+
+        # if you want to use caching and past_key_value_state is not None meaning you have values in your cache
+        if (
+            use_cache
+            and past_key_value_state is not None
+            and past_key_value_state[0].numel() > 0
+        ):
+            if is_self:
+                keys = torch.cat((past_key_value_state[0], keys), dim=2)
+                values = torch.cat((past_key_value_state[1], values), dim=2)
+            else:
+                keys = past_key_value_state[0]
+                values = past_key_value_state[1]
+
+        # Merge rel pos bias and mask into single float mask
+        if mask is not None:
+            # Our expected mask format is bs x q_len x k_len, so to make it broadcastable
+            # we need to create the nheads dimension
+            while len(mask.size()) != 4:  # expects bs (x nheads) x q_len x kv_len
+                mask = mask.unsqueeze(1)
+
         if self.position_encoder is not None:
-            if q_len == 1 and position_ids is None:
-                position_ids = torch.ones(batch_size, q_len, device=q.device).mul(self.step).int()
-            queries, keys = self.position_encoder.adjusted_qk(
-                queries, keys, position_ids, past_key_value_state, use_cache
+            attn_mask: Optional[Tensor] = self.position_encoder.adjusted_mask(
+                mask, queries, keys, past_key_value_state, use_cache
             )
-        
-        queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
-        w = self.w(q)  # b l h
-
-        # Advance caches
-        if q_len == 1:
-            past_key_value_state[0], past_key_value_state[2] = self.advance(
-                past_key_value_state[0][:,0], 
-                past_key_value_state[2][:,0], 
-                keys.squeeze(1),  # b h d
-                w.squeeze(1),  # b h 
-            )
-            past_key_value_state[1], past_key_value_state[3] = self.advance(
-                past_key_value_state[1][:,0],
-                past_key_value_state[3][:,0],
-                values.squeeze(1),  # b h d
-                w.squeeze(1),  # b h
-            )
-            past_key_value_state = [x.unsqueeze(1) for x in past_key_value_state]
         else:
-            # zero cache and weights
-            past_key_value_state = [
-                torch.zeros(batch_size, q_len+1, self.kvheads, self.cache_size, self.emb_kq_per_head, device=q.device),
-                torch.zeros(batch_size, q_len+1, self.kvheads, self.cache_size, self.emb_kq_per_head, device=q.device),
-                torch.ones(batch_size, q_len+1, self.kvheads, self.cache_size, device=q.device).mul(-1000),
-                torch.ones(batch_size, q_len+1, self.kvheads, self.cache_size, device=q.device).mul(-1000),
-            ]
-            self.step = 0
-            # advance n times
-            for i in range(q_len):
-                past_key_value_state[0][:,i+1], past_key_value_state[2][:,i+1] = self.advance(
-                    past_key_value_state[0][:,i], 
-                    past_key_value_state[2][:,i], 
-                    keys[:,i],  # b h d
-                    w[:,i],  # b h 
-                )
-                past_key_value_state[1][:,i+1], past_key_value_state[3][:,i+1] = self.advance(
-                    past_key_value_state[1][:,i],
-                    past_key_value_state[3][:,i],
-                    values[:,i],  # b h d
-                    w[:,i],  # b h
-                )
-            past_key_value_state = [x[:,1:] for x in past_key_value_state]
-        
-        # Advance step counter
-        self.step += q_len
+            attn_mask = mask
 
-        # Do attention against caches
-        # q: b l h e d
-        # k: b l h c d
-        # v: b l h c d
-        keys = self.ln_k(past_key_value_state[0])
-        values = self.ln_v(past_key_value_state[1])
-        queries = queries.view(batch_size, q_len, self.kvheads, -1, self.emb_kq_per_head)
-        attn = queries.matmul(keys.transpose(3,4))  # b l h e c
-        attn = attn.softmax(4)
-        attn = attn.matmul(values)  # b l h e d
+        # Expand kv so black-box attn will work
+        expansion = self.nheads // self.kvheads
+        # k/v: b h l d
+        if expansion != 1:
+            keys_e = keys.unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
+            values_e = (
+                values.unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
+            )
+        else:
+            keys_e = keys
+            values_e = values
 
-        attn = attn.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
+        if attn_algorithm:
+            # Pick which fused attn kernels will run.
+            use_flash = attn_algorithm == "flash"
+            use_mem_efficient = attn_algorithm == "mem"
+            use_math = attn_algorithm == "math"
+
+            torch.backends.cuda.enable_flash_sdp(use_flash)
+            torch.backends.cuda.enable_mem_efficient_sdp(use_mem_efficient)
+            torch.backends.cuda.enable_math_sdp(use_math)
+
+        attn = F.scaled_dot_product_attention(
+            queries,
+            keys_e,
+            values_e,
+            attn_mask=attn_mask,
+            dropout_p=self.p_dropout if self.training else 0.0,
+            is_causal=is_causal_mask,
+        )
+
+        if attn_algorithm:
+            torch.backends.cuda.enable_flash_sdp(self.previous_flash)
+            torch.backends.cuda.enable_mem_efficient_sdp(self.previous_mem_efficient)
+            torch.backends.cuda.enable_math_sdp(self.previous_math)
+
+        # attn: bs x seq_len x nheads*emb_v_per_head
+        # attn: b x h x qlen x ds
+        # attn after permute: b x qlen x h x ds
+        # b x qlen x (d)
+        attn = (
+            attn.transpose(2, 1)
+            .contiguous()
+            .view(batch_size, q_len, self.nheads * self.emb_v_per_head)
+        )
         out = self.dense(attn)
 
+        # if use_cache=True, we return the hidden_state as well as the kv cache
         if use_cache:
-            return out, [x[:,-1:] for x in past_key_value_state]
+            return out, (keys, values)
         else:
             return out
 
