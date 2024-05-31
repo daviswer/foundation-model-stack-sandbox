@@ -17,6 +17,80 @@ from fms.modules.positions import PositionEncoder
 from fms.modules.tp import TPModule
 
 
+def get_scan_plan(x, fmap, h):
+    # x: b n d
+    # plan: for each level, which entries to avg from previous level ([l] n' 2)
+    # inds: which level and entry to pull from in populating heads (n h 2)
+    b, n, d = x.size()
+    # Form ruler-tick progression sequence
+    levels = sum(
+        [
+            torch.arange(n, device=x.device)
+            .remainder(2**i)
+            .sub(2**i - 1)
+            .sign()
+            .add(1)
+            for i in range(n.bit_length())
+        ]
+    ).roll(1, 0)
+    plan = [
+        torch.zeros(0, 2, device=x.device, dtype=torch.int)
+        for _ in range(len(fmap) + 2)
+    ]  # [l] 0 2
+    plan[1] = (
+        torch.arange(x.size(1) + 1, device=x.device, dtype=torch.int)
+        .unsqueeze(1)
+        .expand(-1, 2)
+    )
+    inds = torch.zeros(n, h, 2, device=x.device, dtype=torch.long)  # n h 2
+    inds[:, 0, 1] = torch.arange(n, device=inds.device, dtype=inds.dtype) + 1
+    inds[:, :, 0] = 1
+    ilist = list(range(1, n))
+    for i in ilist:
+        m = fmap.get(levels[i].item(), h)
+        inds[i, 1:m] = inds[i - 1, : m - 1]
+        if m < h:
+            inds[i, m + 1 :] = inds[i - 1, m + 1 :]
+            prev = inds[i - 1, m - 1 : m + 1].flip([0])  # 2 2
+            assert prev[0, 0] == min(levels[i], len(fmap) + 1) or prev[0, 1] == 0, (
+                levels[i],
+                prev[0, 0],
+            )
+            assert prev[1, 0] == min(levels[i], len(fmap) + 1) or prev[1, 1] == 0, (
+                levels[i],
+                prev[1, 0],
+            )
+            level = plan[levels[i] + 1]
+            inds[i, m, 0] = levels[i] + 1
+            inds[i, m, 1] = level.size(0)
+            plan[levels[i] + 1] = torch.cat(
+                [plan[levels[i] + 1], prev[:, 1][None]], dim=0
+            )
+    return plan, inds
+
+
+def shrink_plan(plan, inds, l):
+    # plan: for each level, which entries to avg from previous level ([h] n' 2)
+    # inds: which level and entry to pull from in populating heads (n h 2)
+    
+    # Get modified recursive sum lens
+    # First entry is empty, second is seq len plus one for the zero vector entry
+    # Subsequent entries are 0 up to 2**(i-2), then increment every 2**(i-1), as seq len increases
+    lens = [0,l+1] + [(l-1+2**(i-2))//2**(i-1) for i in range(2,8)]
+            
+    # Slim down the plan and imap to desired l
+    plan = [p[:l] for p,l in zip(plan,lens)]
+    inds = inds[:l]
+
+    # Flatten inds (indexing into flattened plan/cache) (n h)
+    ls = [p.size(0) for p in plan]
+    ls = [0] + ls[:-1]
+    offset = torch.tensor(ls, device=inds.device).cumsum(0)
+    offset = offset[inds[:, :, 0]]
+    inds = offset + inds[:, :, 1]
+    return plan, inds
+
+
 class QKV(nn.Module, metaclass=abc.ABCMeta):
     """Simple module for applying qkv in attention"""
 
@@ -250,6 +324,7 @@ class MultiHeadAttention(nn.Module):
 
         self.inp_len = 0
         self.plan = None
+        self.imap = None
 
         fmap = {8 - i: 64 - (i) ** 2 for i in range(8)}
         fmap.pop(8)
@@ -272,6 +347,56 @@ class MultiHeadAttention(nn.Module):
 
     def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
         return TPMultiHeadAttention.import_module(self, group)
+    
+    def scan(self, x, plan, inds, i, w):
+        """
+        Takes input x of shape [b n ...] and scan plan, computes recursive sums, and
+        extracts cache values into the dimension specified by i > 1.
+        Final output shape is therefore [b n ... c ...] with c the cache size.
+        Applies specified LN to cache, so LN size should match x.size(-1).
+        """
+        assert i > 1, "Output must maintain batch and seqlen in first two dimensions"
+        s = x.size()
+        ws = w.size()
+        # Plan and inds are formed, construct cache via recursive sums
+        cache = [None for _ in plan]
+        cache[1] = nn.functional.pad(x.view(s[0], s[1], -1), (0, 0, 1, 0)).view(
+            s[0], s[1] + 1, *s[2:]
+        )  # b n ...
+        weights = [None for _ in plan]
+        weights[1] = nn.functional.pad(w.view(s[0], s[1], -1), (0,0,1,0), value=-1000).view(
+            s[0], s[1] + 1, *ws[2:]
+        )
+        for j in range(2, len(cache)):
+            weights[j] = weights[j-1].index_select(1, plan[j].view(-1)).view(s[0], -1, 2, *ws[2:])
+            weights_ = weights[j].softmax(dim=2).unsqueeze(-1)
+            weights[j] = weights[j].logsumexp(2)
+            cache[j] = (
+                cache[j - 1]
+                .index_select(1, plan[j].view(-1))
+                .view(s[0], -1, 2, *s[2:])
+            )
+            cache[j] = cache[j].mul(weights_).sum(2)
+
+        # Gather cache    
+        cache = torch.cat(cache[1:], dim=1)  # b n' ...
+        cache = cache.unsqueeze(i).expand(
+            *[-1] * i, inds.size(-1), *[-1] * (len(s) - i)
+        )  # b n' ... h ...
+        inds_ = inds.view(
+            1, inds.size(0), *[1] * (i - 2), inds.size(1), *[1] * (len(s) - i)
+        )  # 1 n 111 h 111
+        inds_ = inds_.expand(s[0], -1, *s[2:i], -1, *s[i:])  # b n ... h ...
+        cache = cache.gather(1, inds_)  # b n ... h ...
+        
+        # Gather final weights
+        weights = torch.cat(weights[1:], dim=1)  # b n' ...
+        inds_ = inds[-1]  # h
+        weights = weights.index_select(1, inds_)  # b h ...
+        weights = weights.view(ws[0],weights.size(1),-1).transpose(1,2)  # b -1 h
+        weights = weights.reshape(ws[0], 1, *ws[2:], -1)  # b 1 ... h
+
+        return cache, weights
     
     def advance(self, cache, weights, x, w):
         # cache: b h c d
@@ -327,17 +452,7 @@ class MultiHeadAttention(nn.Module):
             returned in the form (hidden_state, cache) where hidden_state is a tensor and cache is of the form specified
             in past_key_value_state
         """
-        
-        '''
-        CHECK QLEN
-        IF QLEN > 1:
-            ZERO CACHE + WEIGHTS
-            ZERO STEP
-            FOR STEP IN QLEN
-                ADVANCE
-        ELSE
-            ADVANCE
-        '''
+
         batch_size, q_len, _ = q.size()
         q_out, k_out, v_out = self.in_proj(q, k, v)
         
@@ -373,30 +488,18 @@ class MultiHeadAttention(nn.Module):
             )
             past_key_value_state = [x.unsqueeze(1) for x in past_key_value_state]
         else:
-            # zero cache and weights
-            past_key_value_state = [
-                torch.zeros(batch_size, q_len+1, self.kvheads, self.cache_size, self.emb_kq_per_head, device=q.device),
-                torch.zeros(batch_size, q_len+1, self.kvheads, self.cache_size, self.emb_kq_per_head, device=q.device),
-                torch.ones(batch_size, q_len+1, self.kvheads, self.cache_size, device=q.device).mul(-1000),
-                torch.ones(batch_size, q_len+1, self.kvheads, self.cache_size, device=q.device).mul(-1000),
-            ]
+            # Reset caches
+            past_key_value_state = [None,] * 4
             self.step = 0
-            # advance n times
-            for i in range(q_len):
-                past_key_value_state[0][:,i+1], past_key_value_state[2][:,i+1] = self.advance(
-                    past_key_value_state[0][:,i], 
-                    past_key_value_state[2][:,i], 
-                    keys[:,i],  # b h d
-                    w[:,i],  # b h 
-                )
-                past_key_value_state[1][:,i+1], past_key_value_state[3][:,i+1] = self.advance(
-                    past_key_value_state[1][:,i],
-                    past_key_value_state[3][:,i],
-                    values[:,i],  # b h d
-                    w[:,i],  # b h
-                )
-            past_key_value_state = [x[:,1:] for x in past_key_value_state]
-        
+            # Generate plan by truncating master plan - generate new master if needed
+            if q_len > self.inp_len:
+                self.inp_len = q_len
+                self.plan, self.imap = get_scan_plan(q, self.fmap, self.cache_size)
+            plan, imap = shrink_plan(self.plan, self.imap, q_len)
+            # Scan
+            past_key_value_state[0], past_key_value_state[2] = self.scan(keys, plan, imap, 3, w)
+            past_key_value_state[1], past_key_value_state[3] = self.scan(values, plan, imap, 3, w)
+
         # Advance step counter
         self.step += q_len
 
