@@ -413,10 +413,11 @@ class MultiHeadAttention(nn.Module):
         else:
             lse = weights[:,:,key-1:key+1].logsumexp(2, True)  # b h 1
             mix = weights[:,:,key-1:key+1].sub(lse).exp()  # b h 2
+            # Compute cache merges and shifts. Cloning necessary to prevent memory collisions
             cache[:,:,key] = cache[:,:,key-1:key+1].mul(mix.unsqueeze(3)).sum(2)
-            cache[:,:,1:key] = cache[:,:,:key-1]
+            cache[:,:,1:key] = cache[:,:,:key-1].clone()
             weights[:,:,key] = weights[:,:,key-1:key+1].mul(mix).sum(2)
-            weights[:,:,1:key] = weights[:,:,:key-1]
+            weights[:,:,1:key] = weights[:,:,:key-1].clone()
         cache[:,:,0] = x
         weights[:,:,0] = w
         return cache, weights
