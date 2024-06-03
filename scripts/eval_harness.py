@@ -131,9 +131,9 @@ else:
 c = LLaMAConfig(
     nlayers=24,
     nheads=16,
-    kvheads=4,
+    # kvheads=4,
     emb_dim=2048,
-    hidden_grow_factor=3
+    # hidden_grow_factor=3
 )
 model = LLaMA(c)
 model.load_state_dict(torch.load(args.model_path)['model_state'])
