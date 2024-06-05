@@ -139,7 +139,7 @@ c = LLaMAConfig(
 model = LLaMA(c)
 d = {"model_state":model.state_dict()}
 load_state_dict(
-    state_dict=state_dict, 
+    state_dict=d, 
     storage_reader=FileSystemReader(args.model_path), 
     no_dist=True
 )
