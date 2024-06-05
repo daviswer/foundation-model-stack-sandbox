@@ -368,26 +368,26 @@ class MultiHeadAttention(nn.Module):
         # fmap = {8 - i: 64 - (i) ** 2 for i in range(8)}
         # fmap.pop(8)
         # fmap.pop(7)
-        # fmap = {
-        #     1:7,
-        #     2:13,
-        #     3:18,
-        #     4:22,
-        #     5:25,
-        #     6:27,
-        #     7:29
-        # }
         fmap = {
-            1:26,
-            2:50,
-            3:71,
-            4:89,
-            5:104,
-            6:116,
-            7:124
+            1:7,
+            2:13,
+            3:18,
+            4:22,
+            5:25,
+            6:27,
+            7:29
         }
+        # fmap = {
+        #     1:26,
+        #     2:50,
+        #     3:71,
+        #     4:89,
+        #     5:104,
+        #     6:116,
+        #     7:124
+        # }
         self.fmap = fmap
-        self.cache_size = 128
+        self.cache_size = 32
 
         self.scan_impl = False
         if self.scan_impl:
