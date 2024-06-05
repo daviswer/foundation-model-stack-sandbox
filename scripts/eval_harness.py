@@ -6,6 +6,7 @@ import torch
 import torch._inductor.config
 from lm_eval.utils import make_table
 from torch import distributed as dist
+from torch.distributed._shard.checkpoint import FileSystemReader, load_state_dict
 
 from fms.models.llama import LLaMA, LLaMAConfig
 from fms.utils import evaluation, tokenizers
@@ -136,13 +137,20 @@ c = LLaMAConfig(
     # hidden_grow_factor=3
 )
 model = LLaMA(c)
-d = torch.load(args.model_path)['model_state']
-d = {k[10:]:q for k,q in d.items()}
-for i in range(24):
-    x = d.pop(f"layers.{i}.ff_sub_layer.wg1_fused.weight")
-    d[f"layers.{i}.ff_sub_layer.wg.weight"] = x[:x.size(0)//2]
-    d[f"layers.{i}.ff_sub_layer.w1.weight"] = x[x.size(0)//2:]
-model.load_state_dict(d)
+d = {"model_state":model.state_dict()}
+load_state_dict(
+    state_dict=state_dict, 
+    storage_reader=FileSystemReader(args.model_path), 
+    no_dist=True
+)
+model.load_state_dict(d['model_state'])
+# d = torch.load(args.model_path)['model_state']
+# d = {k[10:]:q for k,q in d.items()}
+# for i in range(24):
+#     x = d.pop(f"layers.{i}.ff_sub_layer.wg1_fused.weight")
+#     d[f"layers.{i}.ff_sub_layer.wg.weight"] = x[:x.size(0)//2]
+#     d[f"layers.{i}.ff_sub_layer.w1.weight"] = x[x.size(0)//2:]
+# model.load_state_dict(d)
 model = model.to(device)
 tokenizer = tokenizers.get_tokenizer(args.tokenizer)
 model.eval()
