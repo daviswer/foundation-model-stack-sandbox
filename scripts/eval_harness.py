@@ -132,7 +132,7 @@ else:
 c = LLaMAConfig(
     nlayers=24,
     nheads=16,
-    # kvheads=4,
+    kvheads=8,
     emb_dim=2048,
     # hidden_grow_factor=3
 )
