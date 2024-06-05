@@ -143,7 +143,7 @@ load_state_dict(
     storage_reader=FileSystemReader(args.model_path), 
     no_dist=True
 )
-model.load_state_dict(state_dict["model_state"]["_orig_mod"])
+model.load_state_dict(d["model_state"]["_orig_mod"])
 # d = torch.load(args.model_path)['model_state']
 # d = {k[10:]:q for k,q in d.items()}
 # for i in range(24):
