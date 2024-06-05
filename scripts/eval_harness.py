@@ -1,4 +1,5 @@
 import argparse
+import time
 import os
 
 import lm_eval
@@ -161,11 +162,13 @@ lm_obj = evaluation.FMSEvalHarnessLM(
 
 lm_eval.tasks.initialize_tasks()
 
+start = time.time()
 results = lm_eval.simple_evaluate(
     model=lm_obj,
     tasks=args.tasks.split(","),
     num_fewshot=args.num_fewshot,
 )
+print("Time:", time.time()-start)
 print(make_table(results))
 if "groups" in results:
     print(make_table(results, "groups"))
