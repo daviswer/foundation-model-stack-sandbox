@@ -137,7 +137,7 @@ c = LLaMAConfig(
     hidden_grow_factor=3
 )
 model = LLaMA(c)
-model.load_state_dict(torch.load(args.model_path)['model_state'])
+model.load_state_dict(torch.load(args.model_path)['model_state'], strict=False)
 model = model.to(device)
 tokenizer = tokenizers.get_tokenizer(args.tokenizer)
 model.eval()
