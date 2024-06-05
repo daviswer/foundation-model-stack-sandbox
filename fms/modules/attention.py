@@ -331,7 +331,9 @@ class MultiHeadAttention(nn.Module):
         fmap.pop(7)
         self.fmap = fmap
         self.cache_size = 64
-
+        
+        self.register_buffer("ringmap", torch.arange(self.cache_size).int())
+        
         self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
 
         self.step = 0
@@ -345,9 +347,6 @@ class MultiHeadAttention(nn.Module):
             elif isinstance(m, LayerNormParameterized) or isinstance(m, QKV):
                 m.reset_parameters()
 
-    def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
-        return TPMultiHeadAttention.import_module(self, group)
-    
     def scan(self, x, plan, inds, i, w):
         """
         Takes input x of shape [b n ...] and scan plan, computes recursive sums, and
@@ -398,7 +397,7 @@ class MultiHeadAttention(nn.Module):
 
         return cache, weights
     
-    def advance(self, cache, weights, x, w):
+    def advance(self, cache, weights, x, w, update_ringmap=True):
         # cache: b h c d
         # weights: b h c
         # x: b h d
@@ -407,19 +406,22 @@ class MultiHeadAttention(nn.Module):
         powers = (2**torch.arange(8, device=cache.device))
         ilevel = (self.step%powers).sub(powers-1).sign().add(1).sum().item()
         key = self.fmap.get(ilevel, c)
+        
         if key == c:
-            cache = cache.roll(1, dims=(2))
-            weights = weights.roll(1, dims=(2))
+            cache[:,:,self.ringmap[-1]] = x
+            weights[:,:,self.ringmap[-1]] = w
+            if update_ringmap:
+                self.ringmap = self.ringmap.roll(1)
         else:
-            lse = weights[:,:,key-1:key+1].logsumexp(2, True)  # b h 1
-            mix = weights[:,:,key-1:key+1].sub(lse).exp()  # b h 2
-            # Compute cache merges and shifts. Cloning necessary to prevent memory collisions
-            cache[:,:,key] = cache[:,:,key-1:key+1].mul(mix.unsqueeze(3)).sum(2)
-            cache[:,:,1:key] = cache[:,:,:key-1].clone()
-            weights[:,:,key] = weights[:,:,key-1:key+1].mul(mix).sum(2)
-            weights[:,:,1:key] = weights[:,:,:key-1].clone()
-        cache[:,:,0] = x
-        weights[:,:,0] = w
+            w_ = weights[:,:,self.ringmap[key-1:key+1]]  # b h 2
+            c_ = cache[:,:,self.ringmap[key-1:key+1]]  # b h 2 d
+            mix = w_.sub(w_.logsumexp(2, True)).exp()
+            cache[:,:,self.ringmap[key]] = c_.mul(mix.unsqueeze(3)).sum(2)
+            weights[:,:,self.ringmap[key]] = w_.mul(mix).sum(2)
+            cache[:,:,self.ringmap[key-1]] = x
+            weights[:,:,self.ringmap[key-1]] = w
+            if update_ringmap:
+                self.ringmap[:key] = self.ringmap[:key].roll(1)
         return cache, weights
 
     def forward(
@@ -480,18 +482,21 @@ class MultiHeadAttention(nn.Module):
                 past_key_value_state[2][:,0], 
                 keys.squeeze(1),  # b h d
                 w.squeeze(1),  # b h 
+                False
             )
             past_key_value_state[1], past_key_value_state[3] = self.advance(
                 past_key_value_state[1][:,0],
                 past_key_value_state[3][:,0],
                 values.squeeze(1),  # b h d
                 w.squeeze(1),  # b h
+                True
             )
             past_key_value_state = [x.unsqueeze(1) for x in past_key_value_state]
         else:
             # Reset caches
             past_key_value_state = [None,] * 4
             self.step = 0
+            self.ringmap = torch.ones_like(self.ringmap).cumsum(0).sub(1)
             # Generate plan by truncating master plan - generate new master if needed
             if q_len > self.inp_len:
                 self.inp_len = q_len
