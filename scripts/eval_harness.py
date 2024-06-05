@@ -137,13 +137,13 @@ c = LLaMAConfig(
     # hidden_grow_factor=3
 )
 model = LLaMA(c)
-d = {"model_state":model.state_dict()}
+d = {"model_state": {"_orig_mod": model.state_dict()}}
 load_state_dict(
     state_dict=d, 
     storage_reader=FileSystemReader(args.model_path), 
     no_dist=True
 )
-model.load_state_dict(d['model_state'])
+model.load_state_dict(state_dict["model_state"]["_orig_mod"])
 # d = torch.load(args.model_path)['model_state']
 # d = {k[10:]:q for k,q in d.items()}
 # for i in range(24):
