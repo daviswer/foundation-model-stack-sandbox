@@ -12,6 +12,7 @@ from fms.distributed.tensorparallel import (
     copy_to_tensor_model_parallel_region,
     reduce_from_tensor_model_parallel_region,
 )
+from fms.modules.layernorm import LayerNormParameterized
 from fms.modules.positions import PositionEncoder
 from fms.modules.tp import TPModule
 
@@ -236,6 +237,9 @@ class MultiHeadAttention(nn.Module):
             self.use_bias,
         )
 
+        self.ln_k = LayerNormParameterized(emb_kq, use_high_precision_pow=True)
+        self.ln_v = LayerNormParameterized(emb_v, use_high_precision_pow=True)
+
         self.dense = nn.Linear(
             self.nheads * self.emb_v_per_head, self.emb_dim, bias=use_bias
         )
@@ -310,7 +314,9 @@ class MultiHeadAttention(nn.Module):
             # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
             queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
             keys = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
+            keys = self.ln_k(keys)
             values = v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
+            values = self.ln_v(values)
 
             # You want to apply rotary embeddings pre-cache
             if self.position_encoder is not None:
