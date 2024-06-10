@@ -368,26 +368,26 @@ class MultiHeadAttention(nn.Module):
         # fmap = {8 - i: 64 - (i) ** 2 for i in range(8)}
         # fmap.pop(8)
         # fmap.pop(7)
-        fmap = {
-            1:7,
-            2:13,
-            3:18,
-            4:22,
-            5:25,
-            6:27,
-            7:29
-        }
         # fmap = {
-        #     1:26,
-        #     2:50,
-        #     3:71,
-        #     4:89,
-        #     5:104,
-        #     6:116,
-        #     7:124
+        #     1:7,
+        #     2:13,
+        #     3:18,
+        #     4:22,
+        #     5:25,
+        #     6:27,
+        #     7:29
         # }
+        fmap = {
+            1:26,
+            2:50,
+            3:71,
+            4:89,
+            5:104,
+            6:116,
+            7:124
+        }
         self.fmap = fmap
-        self.cache_size = 32
+        self.cache_size = 128
 
         self.scan_impl = False
         if self.scan_impl:
@@ -535,6 +535,7 @@ class MultiHeadAttention(nn.Module):
             queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
             keys = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
             values = v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
+            sink = queries.sum(3)  # b l he
 
             # You want to apply rotary embeddings pre-cache
             if self.position_encoder is not None:
@@ -589,7 +590,13 @@ class MultiHeadAttention(nn.Module):
 
         # b l h e d, b l h d 64
         attn = queries.matmul(keys)  # b l h e 64
-        attn = attn.softmax(4)
+        denom = torch.stack([
+                sink.view(batch_size, q_len, self.kvheads, expansion),
+                attn.logsumexp(4),
+            ], 4)  # b l h e 2
+        denom = denom.logsumexp(4, True)  # b l h e 1
+        attn = attn.sub(denom).exp()
+        # attn = attn.softmax(4)
         # b l h e 64, b l h 64 d
         attn = attn.matmul(values)  # b l h e d
 
