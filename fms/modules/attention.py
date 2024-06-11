@@ -544,6 +544,7 @@ class MultiHeadAttention(nn.Module):
                 )
 
         queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
+        sink = sink / (self.emb_kq_per_head**0.5)
 
         # Build telescoping cache
         # k/v: b l h d
