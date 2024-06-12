@@ -535,7 +535,7 @@ class MultiHeadAttention(nn.Module):
             queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
             keys = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
             values = v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
-            sink = queries.sum(3)  # b l he
+            # sink = queries.sum(3)  # b l he
 
             # You want to apply rotary embeddings pre-cache
             if self.position_encoder is not None:
@@ -544,7 +544,7 @@ class MultiHeadAttention(nn.Module):
                 )
 
         queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
-        sink = sink / (self.emb_kq_per_head**0.5)
+        # sink = sink / (self.emb_kq_per_head**0.5)
 
         # Build telescoping cache
         # k/v: b l h d
@@ -591,13 +591,13 @@ class MultiHeadAttention(nn.Module):
 
         # b l h e d, b l h d 64
         attn = queries.matmul(keys)  # b l h e 64
-        denom = torch.stack([
-                sink.view(batch_size, q_len, self.kvheads, expansion),
-                attn.logsumexp(4),
-            ], 4)  # b l h e 2
-        denom = denom.logsumexp(4, True)  # b l h e 1
-        attn = attn.sub(denom).exp()
-        # attn = attn.softmax(4)
+        # denom = torch.stack([
+        #         sink.view(batch_size, q_len, self.kvheads, expansion),
+        #         attn.logsumexp(4),
+        #     ], 4)  # b l h e 2
+        # denom = denom.logsumexp(4, True)  # b l h e 1
+        # attn = attn.sub(denom).exp()
+        attn = attn.softmax(4)
         # b l h e 64, b l h 64 d
         attn = attn.matmul(values)  # b l h e d
 
