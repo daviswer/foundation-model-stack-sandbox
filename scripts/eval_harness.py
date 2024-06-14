@@ -129,12 +129,21 @@ else:
 #     distributed_strategy=distr_param,
 #     group=dist.group.WORLD,
 # )
+# c = LLaMAConfig(
+#     nlayers=24,
+#     nheads=16,
+#     kvheads=8,
+#     emb_dim=2048,
+#     # hidden_grow_factor=3
+# )
 c = LLaMAConfig(
-    nlayers=24,
+    src_vocab_size=128256,
+    emb_dim=2048,
     nheads=16,
     kvheads=8,
-    emb_dim=2048,
-    # hidden_grow_factor=3
+    nlayers=24,
+    hidden_grow_factor=3.5,
+    max_expected_seq_len=4096,
 )
 model = LLaMA(c)
 d = {"model_state": {"_orig_mod": model.state_dict()}}
