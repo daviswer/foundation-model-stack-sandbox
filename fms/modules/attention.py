@@ -25,7 +25,7 @@ def get_scan_plan(device, n, fmap, h):
     if n==128:
         for i in range(n.bit_length()):
             print(i, n)
-            print(torch.arange(n, device=device))
+            print(torch.zeros(n, device=device))
                 # .remainder(2**i)
                 # .sub(2**i - 1)
                 # .sign()
