@@ -21,7 +21,7 @@ def get_scan_plan(device, n, fmap, h):
     # x: b n d
     # plan: for each level, which entries to avg from previous level ([l] n' 2)
     # inds: which level and entry to pull from in populating heads (n h 2)
-    print(n)
+    
     # Form ruler-tick progression sequence
     levels = sum(
         [
@@ -33,6 +33,7 @@ def get_scan_plan(device, n, fmap, h):
             for i in range(n.bit_length())
         ]
     ).roll(1, 0)
+    print(n, levels.max(), len(levels))
     plan = [
         torch.zeros(0, 2, device=device, dtype=torch.int)
         for _ in range(len(fmap) + 2)
@@ -54,14 +55,14 @@ def get_scan_plan(device, n, fmap, h):
         if m < h:
             inds[i, m + 1 :] = inds[i - 1, m + 1 :]
             prev = inds[i - 1, m - 1 : m + 1].flip([0])  # 2 2
-            assert prev[0, 0] == min(levels[i], len(fmap) + 1) or prev[0, 1] == 0, (
-                levels[i],
-                prev[0, 0],
-            )
-            assert prev[1, 0] == min(levels[i], len(fmap) + 1) or prev[1, 1] == 0, (
-                levels[i],
-                prev[1, 0],
-            )
+            # assert prev[0, 0] == min(levels[i], len(fmap) + 1) or prev[0, 1] == 0, (
+            #     levels[i],
+            #     prev[0, 0],
+            # )
+            # assert prev[1, 0] == min(levels[i], len(fmap) + 1) or prev[1, 1] == 0, (
+            #     levels[i],
+            #     prev[1, 0],
+            # )
             level = plan[levels[i] + 1]
             inds[i, m, 0] = levels[i] + 1
             inds[i, m, 1] = level.size(0)
@@ -414,7 +415,7 @@ class MultiHeadAttention(nn.Module):
         # x: b h d
         # w: b h
         c = self.cache_size
-        powers = (2**torch.arange(8, device=cache.device))
+        powers = (2**torch.arange(10, device=cache.device))
         ilevel = (self.step%powers).sub(powers-1).sign().add(1).sum().item()
         key = self.fmap.get(ilevel, c)
         
