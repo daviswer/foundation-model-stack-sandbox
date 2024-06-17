@@ -22,6 +22,8 @@ def get_scan_plan(device, n, fmap, h):
     # plan: for each level, which entries to avg from previous level ([l] n' 2)
     # inds: which level and entry to pull from in populating heads (n h 2)
     
+    print(torch.cuda.memory_summary(abbreviated=True))
+    
     # Form ruler-tick progression sequence
     levels = sum(
         [
@@ -33,8 +35,6 @@ def get_scan_plan(device, n, fmap, h):
             for i in range(n.bit_length())
         ]
     ).roll(1, 0)
-    if n==65:
-        print(levels)
     plan = [
         torch.zeros(0, 2, device=device, dtype=torch.int)
         for _ in range(len(fmap) + 2)
