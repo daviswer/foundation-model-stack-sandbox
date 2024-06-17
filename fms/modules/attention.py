@@ -510,8 +510,8 @@ class MultiHeadAttention(nn.Module):
             self.ringmap = torch.ones_like(self.ringmap).cumsum(0).sub(1)
             # Generate plan by truncating master plan - generate new master if needed
             if q_len > self.inp_len:
-                self.inp_len = q_len
-                self.plan, self.imap = get_scan_plan(q.device, q_len, self.fmap, self.cache_size)
+                self.inp_len = 2**(q_len-1).bit_length()
+                self.plan, self.imap = get_scan_plan(q.device, self.inp_len, self.fmap, self.cache_size)
             plan, imap = shrink_plan(self.plan, self.imap, q_len)
             # Scan
             past_key_value_state[0], past_key_value_state[2] = self.scan(keys, plan, imap, 3, w)
