@@ -130,12 +130,12 @@ else:
 #     group=dist.group.WORLD,
 # )
 c = LLaMAConfig(
-    src_vocab_size=128256,
+    # src_vocab_size=128256,
     nlayers=24,
-    nheads=32,
-    kvheads=2,
+    nheads=16,
+    kvheads=4,
     emb_dim=2048,
-    hidden_grow_factor=3.75,
+    hidden_grow_factor=3,
     max_expected_seq_len=4096,
 )
 model = LLaMA(c)
