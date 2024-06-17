@@ -17,16 +17,15 @@ from fms.modules.positions import PositionEncoder
 from fms.modules.tp import TPModule
 
 
-def get_scan_plan(x, fmap, h):
+def get_scan_plan(device, n, fmap, h):
     # x: b n d
     # plan: for each level, which entries to avg from previous level ([l] n' 2)
     # inds: which level and entry to pull from in populating heads (n h 2)
-    b, n, d = x.size()
     print(n)
     # Form ruler-tick progression sequence
     levels = sum(
         [
-            torch.arange(n, device=x.device)
+            torch.arange(n, device=device)
             .remainder(2**i)
             .sub(2**i - 1)
             .sign()
@@ -35,19 +34,20 @@ def get_scan_plan(x, fmap, h):
         ]
     ).roll(1, 0)
     plan = [
-        torch.zeros(0, 2, device=x.device, dtype=torch.int)
+        torch.zeros(0, 2, device=device, dtype=torch.int)
         for _ in range(len(fmap) + 2)
     ]  # [l] 0 2
     plan[1] = (
-        torch.arange(n + 1, device=x.device, dtype=torch.int)
+        torch.arange(n + 1, device=device, dtype=torch.int)
         .unsqueeze(1)
         .expand(-1, 2)
     )
-    inds = torch.zeros(n, h, 2, device=x.device, dtype=torch.long)  # n h 2
+    inds = torch.zeros(n, h, 2, device=device, dtype=torch.long)  # n h 2
     inds[:, 0, 1] = torch.arange(n, device=inds.device, dtype=inds.dtype) + 1
     inds[:, :, 0] = 1
     for i in range(1, n):
-        m = fmap.get(levels[i].item(), h)
+        ran = levels[i].item()
+        m = fmap.get(ran, h)
         inds[i, 1:m] = inds[i - 1, : m - 1]
         if m < h:
             inds[i, m + 1 :] = inds[i - 1, m + 1 :]
@@ -509,7 +509,7 @@ class MultiHeadAttention(nn.Module):
             # Generate plan by truncating master plan - generate new master if needed
             if q_len > self.inp_len:
                 self.inp_len = q_len
-                self.plan, self.imap = get_scan_plan(q, self.fmap, self.cache_size)
+                self.plan, self.imap = get_scan_plan(q.device, q_len, self.fmap, self.cache_size)
             plan, imap = shrink_plan(self.plan, self.imap, q_len)
             # Scan
             past_key_value_state[0], past_key_value_state[2] = self.scan(keys, plan, imap, 3, w)
