@@ -130,6 +130,7 @@ else:
 #     group=dist.group.WORLD,
 # )
 c = LLaMAConfig(
+    src_vocab_size=128256,
     nlayers=24,
     nheads=32,
     kvheads=2,
