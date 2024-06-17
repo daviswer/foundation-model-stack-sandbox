@@ -21,15 +21,6 @@ def get_scan_plan(device, n, fmap, h):
     # x: b n d
     # plan: for each level, which entries to avg from previous level ([l] n' 2)
     # inds: which level and entry to pull from in populating heads (n h 2)
-    
-    if n==128:
-        for i in range(n.bit_length()):
-            print(i, n)
-            print(torch.zeros(n, device=device))
-                # .remainder(2**i)
-                # .sub(2**i - 1)
-                # .sign()
-                # .add(1))
 
     # Form ruler-tick progression sequence
     levels = sum(
@@ -512,6 +503,7 @@ class MultiHeadAttention(nn.Module):
             past_key_value_state = [x.unsqueeze(1) for x in past_key_value_state]
         else:
             # Reset caches
+            print(q_len)
             past_key_value_state = [None,] * 4
             self.step = 0
             self.ringmap = torch.ones_like(self.ringmap).cumsum(0).sub(1)
