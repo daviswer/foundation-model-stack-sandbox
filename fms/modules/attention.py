@@ -23,7 +23,8 @@ def get_scan_plan(device, n, fmap, h):
     # inds: which level and entry to pull from in populating heads (n h 2)
     
     print(torch.cuda.memory_summary(abbreviated=True))
-    
+    print(n)
+
     # Form ruler-tick progression sequence
     levels = sum(
         [
