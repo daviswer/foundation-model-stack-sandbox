@@ -326,20 +326,20 @@ class MultiHeadAttention(nn.Module):
         self.plan = None
         self.imap = None
 
-        fmap = {8 - i: 64 - (i) ** 2 for i in range(8)}
-        fmap.pop(8)
-        fmap.pop(7)
-        # fmap = {
-        #     1:26,
-        #     2:50,
-        #     3:71,
-        #     4:89,
-        #     5:104,
-        #     6:116,
-        #     7:124
-        # }
+        # fmap = {8 - i: 64 - (i) ** 2 for i in range(8)}
+        # fmap.pop(8)
+        # fmap.pop(7)
+        fmap = {
+            1:26,
+            2:50,
+            3:71,
+            4:89,
+            5:104,
+            6:116,
+            7:124
+        }
         self.fmap = fmap
-        self.cache_size = 64
+        self.cache_size = 128 # 64
         
         self.register_buffer("ringmap", torch.arange(self.cache_size).int())
         
