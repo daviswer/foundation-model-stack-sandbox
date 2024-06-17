@@ -33,7 +33,8 @@ def get_scan_plan(device, n, fmap, h):
             for i in range(n.bit_length())
         ]
     ).roll(1, 0)
-    print(n, levels.max(), len(levels))
+    if n==65:
+        print(levels)
     plan = [
         torch.zeros(0, 2, device=device, dtype=torch.int)
         for _ in range(len(fmap) + 2)
@@ -47,8 +48,6 @@ def get_scan_plan(device, n, fmap, h):
     inds[:, 0, 1] = torch.arange(n, device=inds.device, dtype=inds.dtype) + 1
     inds[:, :, 0] = 1
     for i in range(1, n):
-        if i>=len(levels) or i<1:
-            print("ERROR:", i)
         ran = levels[i].item()
         m = fmap.get(ran, h)
         inds[i, 1:m] = inds[i - 1, : m - 1]
