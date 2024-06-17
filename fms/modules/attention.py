@@ -45,8 +45,7 @@ def get_scan_plan(x, fmap, h):
     inds = torch.zeros(n, h, 2, device=x.device, dtype=torch.long)  # n h 2
     inds[:, 0, 1] = torch.arange(n, device=inds.device, dtype=inds.dtype) + 1
     inds[:, :, 0] = 1
-    ilist = list(range(1, n))
-    for i in ilist:
+    for i in range(1, n):
         m = fmap.get(levels[i].item(), h)
         inds[i, 1:m] = inds[i - 1, : m - 1]
         if m < h:
