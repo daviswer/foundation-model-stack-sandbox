@@ -46,7 +46,7 @@ def get_scan_plan(device, n, fmap, h):
     inds[:, 0, 1] = torch.arange(n, device=inds.device, dtype=inds.dtype) + 1
     inds[:, :, 0] = 1
     for i in range(1, n):
-        if i>=len(levels):
+        if i>=len(levels) or i<1:
             print("ERROR:", i)
         ran = levels[i].item()
         m = fmap.get(ran, h)
