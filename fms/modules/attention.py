@@ -25,11 +25,11 @@ def get_scan_plan(device, n, fmap, h):
     if n==128:
         for i in range(n.bit_length()):
             print(i)
-            print(torch.arange(n, device=device)
-                .remainder(2**i)
-                .sub(2**i - 1)
-                .sign()
-                .add(1))
+            print(torch.arange(n, device=device))
+                # .remainder(2**i)
+                # .sub(2**i - 1)
+                # .sign()
+                # .add(1))
 
     # Form ruler-tick progression sequence
     levels = sum(
