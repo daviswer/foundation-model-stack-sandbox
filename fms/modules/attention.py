@@ -23,8 +23,6 @@ def get_scan_plan(device, n, fmap, h):
     # inds: which level and entry to pull from in populating heads (n h 2)
 
     # Form ruler-tick progression sequence
-    if n==128:
-        print(torch.zeros(n, device=device))
     levels = sum(
         [
             torch.arange(n, device=device)
@@ -78,7 +76,7 @@ def shrink_plan(plan, inds, l):
     # Get modified recursive sum lens
     # First entry is empty, second is seq len plus one for the zero vector entry
     # Subsequent entries are 0 up to 2**(i-2), then increment every 2**(i-1), as seq len increases
-    lens = [0,l+1] + [(l-1+2**(i-2))//2**(i-1) for i in range(2,8)]
+    lens = [0,l+1] + [(l-1+2**(i-2))//2**(i-1) for i in range(2,len(plan))]
             
     # Slim down the plan and imap to desired l
     plan = [p[:l] for p,l in zip(plan,lens)]
@@ -505,7 +503,6 @@ class MultiHeadAttention(nn.Module):
             past_key_value_state = [x.unsqueeze(1) for x in past_key_value_state]
         else:
             # Reset caches
-            print(q_len)
             past_key_value_state = [None,] * 4
             self.step = 0
             self.ringmap = torch.ones_like(self.ringmap).cumsum(0).sub(1)
