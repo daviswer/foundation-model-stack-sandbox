@@ -24,7 +24,6 @@ def get_scan_plan(device, n, fmap, h):
 
     # Form ruler-tick progression sequence
     if n==128:
-        print(torch.cuda.memory_summary(abbreviated=True))
         print(torch.zeros(n, device=device))
     levels = sum(
         [
