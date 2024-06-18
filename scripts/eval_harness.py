@@ -11,6 +11,8 @@ from torch import distributed as dist
 from fms.models.llama import LLaMA, LLaMAConfig
 from fms.utils import evaluation, tokenizers
 
+os.environ["CUDA_LAUNCH_BLOCKING"] = 1
+
 
 """
 Example use:
