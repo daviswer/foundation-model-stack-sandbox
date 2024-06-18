@@ -23,6 +23,7 @@ def get_scan_plan(device, n, fmap, h):
     # inds: which level and entry to pull from in populating heads (n h 2)
 
     # Form ruler-tick progression sequence
+    torch.zeros(n, device=device)
     levels = sum(
         [
             torch.arange(n, device=device)
