@@ -24,9 +24,9 @@ By performing merges in the right predetermined sequence, we can keep to our (so
 
 Here, the L-shapes represent merges: two values combine into one with twice the coverage, and the existing colors/entries are re-allocated to the previous entries plus the one new token. 
 
-Similar to scan-based and state-space models, this merge/compression pattern admits an efficient though somewhat involved implementation for pretraining in parallel, while also reducing to a very simple RNN-style "update rule" at inference time. Simply merge two values and add the next. In fact, the telescoping cache can be implemented as a Linear Time-Dependent associative scan with non-diagonal update matrices (though this is not the approach taken here).
+Similar to scan-based and state-space models, this merge/compression pattern admits an efficient though somewhat involved implementation for pretraining in parallel, while also reducing to a very simple RNN-style "update rule" at inference time. Simply merge two values and add the next. In fact, the telescoping cache can be implemented as a Linear Time-Dependent associative scan with non-diagonal update matrices (though this is not the approach taken here). However, unlike scan-based approaches, telescoping caches explicitly retain information retrieval capabilities, since we're still doing vanilla attention over the compressed cache.
 
-In small-scale runs (~1.5B-scale Llama models over 100B tokens), telescoping cache models converge to similar or slightly worse values, while demonstrating comparable - and even slightly improved! - scores on lm-eval tasks:
+In small-scale runs (~1.5B-scale Llama models over 100B tokens), telescoping cache models converge to similar or slightly worse values, while demonstrating comparable - and even slightly improved! - scores on lm-eval tasks (zero-shot, normalized acc):
 
 <img src="results1.png" alt="isolated" width="600"/>
 <img src="results2.png" alt="isolated" width="600"/>
