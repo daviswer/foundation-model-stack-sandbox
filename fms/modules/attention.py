@@ -444,27 +444,15 @@ class MultiHeadAttention(nn.Module):
         cache_k = ln_k(torch.cat(cache_k[1:], dim=1))  # b n' h d
         cache_v = ln_v(torch.cat(cache_v[1:], dim=1))  # b n' h d
 
-        i = 4
-        cache_k = cache_k.unsqueeze(i).expand(
-            *[-1] * i, inds.size(-1), *[-1] * (4 - i)
-        )  # b n' ... h ...
-        inds_k = inds.view(
-            1, inds.size(0), *[1] * (i - 2), inds.size(1), *[1] * (4 - i)
-        )  # b n 111 h 111
-        s = k.size()
-        inds_k = inds_k.expand(s[0], -1, *s[2:i], -1, *s[i:])  # b n ... h ...
-        cache_k = cache_k.gather(1, inds)  # b n ... h ...
+        cache_k = cache_k.unsqueeze(4).expand(-1,-1,-1,-1,inds.size(1))  # b n' h d c
+        inds_k = inds.view(1, inds.size(0), 1, 1, inds.size(1))  # 1 l 1 1 c
+        inds_k = inds_k.expand(b, -1, h, d_k, -1)  # b l h d c
+        cache_k = cache_k.gather(1, inds_k)  # b l h d c
 
-        i = 3
-        cache_v = cache_v.unsqueeze(i).expand(
-            *[-1] * i, inds.size(-1), *[-1] * (4 - i)
-        )  # b n' ... h ...
-        inds_v = inds.view(
-            1, inds.size(0), *[1] * (i - 2), inds.size(1), *[1] * (4 - i)
-        )  # b n 111 h 111
-        s = v.size()
-        inds_v = inds_v.expand(s[0], -1, *s[2:i], -1, *s[i:])  # b n ... h ...
-        cache_v = cache_v.gather(1, inds)  # b n ... h ...
+        cache_v = cache_v.unsqueeze(3).expand(-1,-1,-1,inds.size(1),-1)  # b n' h c d
+        inds_v = inds.view(1, inds.size(0), 1, inds.size(1), 1)  # 1 l 1 c 1
+        inds_v = inds_v.expand(b, -1, h, -1, d_v)  # b l h c d
+        cache_v = cache_v.gather(1, inds_v)  # b l h c d
 
         return cache_k, cache_v
 
