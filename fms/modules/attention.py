@@ -15,62 +15,7 @@ from fms.distributed.tensorparallel import (
 from fms.modules.layernorm import LayerNormParameterized
 from fms.modules.positions import PositionEncoder
 from fms.modules.tp import TPModule
-
-
-def scan(state, g):
-    # state: b n d h
-    # g: 1/b n h h
-    state = state.clone()
-    g = g.clone()
-    s = state.size()
-    g0 = g.size(0)
-    logl = s[1].bit_length() - 1
-    # Up sweep: create ruler ticks
-    for i in range(logl):
-        span = 2**(i+1)
-        state = state.view(s[0], -1, span, *s[2:])  # b -1 span d h
-        g = g.view(g0, -1, span, s[3], s[3])  # 1 -1 span h h
-        newstate = state[:,:,span//2-1].matmul(g[:,:,-1])
-        newgate = g[:,:,span//2-1].matmul(g[:,:,-1])
-        state[:,:,-1] += newstate
-        g[:,:,-1] = newgate
-        
-    # Down sweep: fill in blanks
-    state = state.view(*s)
-    g = g.view(g0, s[1], s[3], s[3])
-    state = nn.functional.pad(state, (0,0,0,0,1,0))
-    g = nn.functional.pad(g, (0,0,0,0,1,0))[:,:-1]
-    remainder = state[:,-1:]
-    state = state[:,:-1]
-    for i in range(logl-1):
-        span = 2**(logl-i-1)
-        state = state.view(s[0], -1, span, *s[2:])  # b -1 span d h
-        g = g.view(g0, -1, span, s[3], s[3])  # b -1 span h h
-        state[:,:,span//2] = state[:,:,span//2] + state[:,:,0].matmul(g[:,:,span//2])
-        g[:,:,span//2] = g[:,:,0].matmul(g[:,:,span//2])
-    state = torch.cat([state.view(*s)[:,1:], remainder], dim=1)
-    return state
-
-
-class MatScan(torch.autograd.Function):
-    @staticmethod
-    def forward(state, gate):
-        return scan(state, gate)
-
-    @staticmethod
-    def setup_context(ctx, inputs, output):
-        state, gate = inputs
-        ctx.save_for_backward(gate)
-
-    @staticmethod
-    def backward(ctx, grad):
-        gate = ctx.saved_tensors[0]
-
-        # Gate-accumulate grads
-        gflip = gate.flip([1]).transpose(2,3)
-        gatesum = scan(grad.flip([1]), gflip.roll(1, dims=1)).flip([1])  # b n d h
-
-        return gatesum, None
+from fms.triton.index_linear import IndLinear
 
 
 def get_scan_plan(x, fmap, h):
@@ -388,14 +333,11 @@ class MultiHeadAttention(nn.Module):
         self.fmap = fmap
         self.cache_size = 128
 
-        self.scan_impl = False
-        if self.scan_impl:
-            self.register_buffer("gates", self.make_gates())
-            self.matscan = MatScan.apply
-
         self.weighted = True
         if self.weighted:
             self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
+
+        self.indlinear = IndLinear.apply
 
     def reset_parameters(self):
         for m in self.modules():
@@ -408,23 +350,6 @@ class MultiHeadAttention(nn.Module):
 
     def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
         return TPMultiHeadAttention.import_module(self, group)
-    
-    def make_gates(self):
-        n = 1024  # Roughly, total cache window length (actually somewhat smaller)
-        d = self.cache_size
-        interval = sum([torch.arange(n).remainder(2**x).sub(2**x-1).sign().add(1) 
-                        for x in range(n.bit_length())])
-        m = torch.zeros(n,d,d)
-        for i in range(n):
-            key = self.fmap.get(interval[i].item(), d)
-            for j in range(key+1, d):
-                m[i,j,j] = 1
-            if key < d:
-                m[i,key,key] = .5**.5
-                m[i,key,key-1] = .5**.5
-            for j in range(1,min(key,d)):
-                m[i,j,j-1] = 1
-        return m.transpose(1,2)  # 1k d d
 
     def scan(self, x, plan, ln, i, w=None):
         """
@@ -465,14 +390,15 @@ class MultiHeadAttention(nn.Module):
             
         cache = torch.cat(cache[1:], dim=1)  # b n' ...
         cache = ln(cache)
-        cache = cache.unsqueeze(i).expand(
-            *[-1] * i, inds.size(-1), *[-1] * (len(s) - i)
-        )  # b n' ... h ...
-        inds = inds.view(
-            1, inds.size(0), *[1] * (i - 2), inds.size(1), *[1] * (len(s) - i)
-        )  # b n 111 h 111
-        inds = inds.expand(s[0], -1, *s[2:i], -1, *s[i:])  # b n ... h ...
-        return cache.gather(1, inds)  # b n ... h ...
+        return cache
+        # cache = cache.unsqueeze(i).expand(
+        #     *[-1] * i, inds.size(-1), *[-1] * (len(s) - i)
+        # )  # b n' ... h ...
+        # inds = inds.view(
+        #     1, inds.size(0), *[1] * (i - 2), inds.size(1), *[1] * (len(s) - i)
+        # )  # b n 111 h 111
+        # inds = inds.expand(s[0], -1, *s[2:i], -1, *s[i:])  # b n ... h ...
+        # return cache.gather(1, inds)  # b n ... h ...
 
     def forward(
         self,
@@ -550,26 +476,8 @@ class MultiHeadAttention(nn.Module):
         w = None
         if self.weighted:
             w = self.w(k).unsqueeze(-1)  # b l h 1
-        if not self.scan_impl:
-            # keys = keys.view(batch_size, kv_len, -1)
-            keys = self.scan(keys, self.plan, self.ln_k, 4, w)  # b l h d 64
-            values = self.scan(values, self.plan, self.ln_v, 3, w)  # b l h 64 d
-        else:
-            gate = self.gates.repeat(4,1,1)[None]  # 1 l 64 64
-            keys = keys.view(batch_size, kv_len, -1, 1)
-            keys = F.pad(keys, (0, self.cache_size-1))  # b l hd 64
-            keys = self.matscan(keys, gate)
-            # keys = keys / keys.pow(2).mean(2, True).sqrt().add(1e-6)
-            keys = keys.unflatten(
-                2, (self.kvheads, self.emb_kq_per_head)
-            )  # b l h d 64
-            values = values.view(batch_size, kv_len, -1, 1)
-            values = F.pad(values, (0, self.cache_size-1))  # b l hd 64
-            values = self.matscan(values, gate).unflatten(
-                2, (self.kvheads, self.emb_v_per_head)
-            )  # b l h d 64
-            # values = values / values.pow(2).mean(3, True).sqrt().add(1e-6)
-            values = values.transpose(3,4)  # b l h 64 d
+        keys = self.scan(keys, self.plan, self.ln_k, 4, w)  # b n h d
+        values = self.scan(values, self.plan, self.ln_v, 3, w)  # b n h d
 
         # if you want to use caching and past_key_value_state is not None meaning you have values in your cache
         if (
@@ -588,16 +496,13 @@ class MultiHeadAttention(nn.Module):
         expansion = self.nheads // self.kvheads
         queries = queries.unflatten(2, (self.kvheads, expansion))  # b l h e d
 
-        # b l h e d, b l h d 64
-        attn = queries.matmul(keys)  # b l h e 64
-        # denom = torch.stack([
-        #         sink.view(batch_size, q_len, self.kvheads, expansion),
-        #         attn.logsumexp(4),
-        #     ], 4)  # b l h e 2
-        # denom = denom.logsumexp(4, True)  # b l h e 1
-        # attn = attn.sub(denom).exp()
+        # b l h e d, b n h d, l c
+        attn = self.indlinear(queries, keys, self.plan[-1])  # b l h e c
         attn = attn.softmax(4)
-        # b l h e 64, b l h 64 d
+
+        assert False, "A dot V matmul not yet implemented!"
+
+        # b l h e c, b l h d, l c
         attn = attn.matmul(values)  # b l h e d
 
         attn = attn.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
