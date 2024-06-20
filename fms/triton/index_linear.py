@@ -719,3 +719,113 @@ class IndLinear(torch.autograd.Function):
         B_grad = invoke_telescoping_bwd_b_kernel(A, B, M, G, config_b)
 
         return A_grad, B_grad, None
+
+
+class IndLinearTransposed(torch.autograd.Function):
+    @staticmethod
+    def forward(A,B,M):
+        config = {
+            "block_size_b": 1,
+            "block_size_m": 64,
+            "block_size_n": 64,
+            "block_size_k": 64,
+        }
+        return invoke_telescoping_bwd_a_kernel(A, B, M, config)
+
+    @staticmethod
+    def setup_context(ctx, inputs, output):
+        A,B,M = inputs
+        ctx.save_for_backward(A,B,M)
+
+    @staticmethod
+    def backward(ctx, G):
+        A,B,M = ctx.saved_tensors
+
+        config_a = {
+            "block_size_b": 1,
+            "block_size_m": 64,
+            "block_size_n": 64,
+            "block_size_k": 64,
+        }
+        A_grad = invoke_telescoping_kernel(G, B, M, config_a)
+
+        config_b = {
+            "block_size_b": 1,
+            "block_size_m": 16,
+            "block_size_e": 1,
+        }
+        B_grad = invoke_telescoping_bwd_b_kernel(G, B, M, A, config_b)
+
+        return A_grad, B_grad, None
+
+
+b = 1
+l = 4096
+n = 8192
+h = 2
+e = 16
+c = 128
+d = 128
+
+A = torch.randn(b, l, h, e, d, requires_grad=True, device="cuda")
+B = torch.randn(b, n, h, d, requires_grad=True, device="cuda")
+M = torch.rand(l, c).mul(n).long().cuda()
+
+Z = (
+    B.unsqueeze(-1)
+    .expand(-1, -1, -1, -1, c)
+    .gather(1, M.view(1, l, 1, 1, c).expand(b, -1, h, d, -1))
+)
+O = A.matmul(Z)
+loss = O.pow(2).sum()
+loss.backward()
+
+A2 = torch.empty_like(A, requires_grad=True)
+A2.data = A.data
+B2 = torch.empty_like(B, requires_grad=True)
+B2.data = B.data
+indlinear = IndLinear.apply
+O2 = inlinear(A2,B2,M)
+loss2 = O2.pow(2).sum()
+loss2.backward()
+
+print("Kernel error:")
+print(
+    A.grad.sub(A2.grad).abs().mean(), A.grad.sub(A2.grad).abs().mean() / A.grad.abs().mean()
+)
+print(
+    B.grad.sub(B2.grad).abs().mean(), B.grad.sub(B2.grad).abs().mean() / B.grad.abs().mean()
+)
+
+
+
+# Check correctness of transposed fn
+A = torch.randn(b, l, h, e, c, requires_grad=True, device="cuda")
+B = torch.randn(b, n, h, d, requires_grad=True, device="cuda")
+M = torch.rand(l, c).mul(n).long().cuda()
+
+Z = (
+    B.unsqueeze(-2)
+    .expand(-1, -1, -1, c, -1)
+    .gather(1, M.view(1, l, 1, c, 1).expand(b, -1, h, -1, d))
+)
+O = A.matmul(Z)
+loss = O.pow(2).sum()
+loss.backward()
+
+A2 = torch.empty_like(A, requires_grad=True)
+A2.data = A.data
+B2 = torch.empty_like(B, requires_grad=True)
+B2.data = B.data
+indlinear = IndLinearTransposed.apply
+O2 = inlinear(A2,B2,M)
+loss2 = O2.pow(2).sum()
+loss2.backward()
+
+print("Transposed kernel error:")
+print(
+    A.grad.sub(A2.grad).abs().mean(), A.grad.sub(A2.grad).abs().mean() / A.grad.abs().mean()
+)
+print(
+    B.grad.sub(B2.grad).abs().mean(), B.grad.sub(B2.grad).abs().mean() / B.grad.abs().mean()
+)
