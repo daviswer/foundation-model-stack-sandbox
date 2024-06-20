@@ -421,10 +421,10 @@ class MultiHeadAttention(nn.Module):
         cache_k = [None for _ in plan]
         cache_v = [None for _ in plan]
         cache_k[1] = nn.functional.pad(k.view(b, l, -1), (0, 0, 1, 0)).view(
-            b, l + 1, h * d_k
+            b, l + 1, h, d_k
         )  # b n hd
         cache_v[1] = nn.functional.pad(v.view(b, l, -1), (0, 0, 1, 0)).view(
-            b, l + 1, h * d_v
+            b, l + 1, h, d_v
         )  # b n hd
         for j in range(2, len(cache_k)):
             cache_k[j] = (
