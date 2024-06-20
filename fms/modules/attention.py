@@ -413,7 +413,6 @@ class MultiHeadAttention(nn.Module):
         Final output shape is therefore [b n ... c ...] with c the cache size.
         Applies specified LN to cache, so LN size should match x.size(-1).
         """
-        assert i > 1, "Output must maintain batch and seqlen in first two dimensions"
         b,l,h,d_k = k.size()
         d_v = v.size(-1)
         inds = plan[-1]  # n h
