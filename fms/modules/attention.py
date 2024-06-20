@@ -388,14 +388,11 @@ class MultiHeadAttention(nn.Module):
         self.fmap = fmap
         self.cache_size = 64
 
-        self.scan_impl = False
-        if self.scan_impl:
-            self.register_buffer("gates", self.make_gates())
-            self.matscan = MatScan.apply
-
-        self.weighted = True
-        if self.weighted:
-            self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
+        self.mlp = nn.Sequential(
+            nn.Linear(2*self.kvheads*self.emb_kq_per_head, self.emb_kq_per_head, bias=self.use_bias),
+            nn.SiLU(),
+            nn.Linear(self.emb_kq_per_head, 2*self.kvheads, bias=self.use_bias)
+        )
 
     def reset_parameters(self):
         for m in self.modules():
@@ -408,25 +405,8 @@ class MultiHeadAttention(nn.Module):
 
     def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
         return TPMultiHeadAttention.import_module(self, group)
-    
-    def make_gates(self):
-        n = 1024  # Roughly, total cache window length (actually somewhat smaller)
-        d = self.cache_size
-        interval = sum([torch.arange(n).remainder(2**x).sub(2**x-1).sign().add(1) 
-                        for x in range(n.bit_length())])
-        m = torch.zeros(n,d,d)
-        for i in range(n):
-            key = self.fmap.get(interval[i].item(), d)
-            for j in range(key+1, d):
-                m[i,j,j] = 1
-            if key < d:
-                m[i,key,key] = .5**.5
-                m[i,key,key-1] = .5**.5
-            for j in range(1,min(key,d)):
-                m[i,j,j-1] = 1
-        return m.transpose(1,2)  # 1k d d
 
-    def scan(self, x, plan, ln, i, w=None):
+    def scan(self, k, v, plan, ln_k, ln_v, mlp):
         """
         Takes input x of shape [b n ...] and scan plan, computes recursive sums, and
         extracts cache values into the dimension specified by i > 1.
@@ -434,45 +414,60 @@ class MultiHeadAttention(nn.Module):
         Applies specified LN to cache, so LN size should match x.size(-1).
         """
         assert i > 1, "Output must maintain batch and seqlen in first two dimensions"
-        s = x.size()
-        weighted = w is not None
-        if weighted:
-            ws = w.size()
-            weights = nn.functional.pad(w.view(s[0], s[1], -1), (0,0,1,0), value=-1000).view(
-                s[0], s[1] + 1, *ws[2:]
-            )
+        b,l,h,d_k = k.size()
+        d_v = v.size(-1)
         inds = plan[-1]  # n h
         plan = plan[:-1]
         # Plan and inds are formed, construct cache via recursive sums
-        cache = [None for _ in plan]
-        cache[1] = nn.functional.pad(x.view(s[0], s[1], -1), (0, 0, 1, 0)).view(
-            s[0], s[1] + 1, *s[2:]
-        )  # b n ...
-        for j in range(2, len(cache)):
-            if weighted:
-                weights = weights.index_select(1, plan[j].view(-1)).view(s[0], -1, 2, *ws[2:])
-                weights_ = weights.softmax(dim=2)
-                weights = weights.logsumexp(2)
-            cache[j] = (
-                cache[j - 1]
+        cache_k = [None for _ in plan]
+        cache_v = [None for _ in plan]
+        cache_k[1] = nn.functional.pad(k.view(b, l, -1), (0, 0, 1, 0)).view(
+            b, l + 1, h * d_k
+        )  # b n hd
+        cache_v[1] = nn.functional.pad(v.view(b, l, -1), (0, 0, 1, 0)).view(
+            b, l + 1, h * d_v
+        )  # b n hd
+        for j in range(2, len(cache_k)):
+            cache_k[j] = (
+                cache_k[j - 1]
                 .index_select(1, plan[j].view(-1))
-                .view(s[0], -1, 2, *s[2:])
+                .view(b, -1, 2, h, d_k)
             )
-            if weighted:
-                cache[j] = cache[j].mul(weights_).sum(2)
-            else:
-                cache[j] = cache[j].sum(2).div(2**0.5)
+            weights = mlp(cache_k[j].view(b,-1,2*h*d_k)).view(b,-1,2,h,1).softmax(2)  # b n' 2 h 1
+            cache_k[j] = cache_k[j].mul(weights).sum(2)  # b n' h d
+            cache_v[j] = (
+                cache_v[j - 1]
+                .index_select(1, plan[j].view(-1))
+                .view(b, -1, 2, h, d_v)
+            )
+            cache_v[j] = cache_v[j].mul(weights).sum(2)  # b n' h d
             
-        cache = torch.cat(cache[1:], dim=1)  # b n' ...
-        cache = ln(cache)
-        cache = cache.unsqueeze(i).expand(
-            *[-1] * i, inds.size(-1), *[-1] * (len(s) - i)
+        cache_k = ln_k(torch.cat(cache_k[1:], dim=1))  # b n' h d
+        cache_v = ln_v(torch.cat(cache_v[1:], dim=1))  # b n' h d
+
+        i = 4
+        cache_k = cache_k.unsqueeze(i).expand(
+            *[-1] * i, inds.size(-1), *[-1] * (4 - i)
         )  # b n' ... h ...
-        inds = inds.view(
-            1, inds.size(0), *[1] * (i - 2), inds.size(1), *[1] * (len(s) - i)
+        inds_k = inds.view(
+            1, inds.size(0), *[1] * (i - 2), inds.size(1), *[1] * (4 - i)
         )  # b n 111 h 111
-        inds = inds.expand(s[0], -1, *s[2:i], -1, *s[i:])  # b n ... h ...
-        return cache.gather(1, inds)  # b n ... h ...
+        s = k.size()
+        inds_k = inds_k.expand(s[0], -1, *s[2:i], -1, *s[i:])  # b n ... h ...
+        cache_k = cache_k.gather(1, inds)  # b n ... h ...
+
+        i = 3
+        cache_v = cache_v.unsqueeze(i).expand(
+            *[-1] * i, inds.size(-1), *[-1] * (4 - i)
+        )  # b n' ... h ...
+        inds_v = inds.view(
+            1, inds.size(0), *[1] * (i - 2), inds.size(1), *[1] * (4 - i)
+        )  # b n 111 h 111
+        s = v.size()
+        inds_v = inds_v.expand(s[0], -1, *s[2:i], -1, *s[i:])  # b n ... h ...
+        cache_v = cache_v.gather(1, inds)  # b n ... h ...
+
+        return cache_k, cache_v
 
     def forward(
         self,
@@ -547,30 +542,8 @@ class MultiHeadAttention(nn.Module):
 
         # Build telescoping cache
         # k/v: b l h d
-        w = None
-        if self.weighted:
-            w = self.w(k).unsqueeze(-1)  # b l h 1
-        if not self.scan_impl:
-            # keys = keys.view(batch_size, kv_len, -1)
-            keys = self.scan(keys, self.plan, self.ln_k, 4, w)  # b l h d 64
-            values = self.scan(values, self.plan, self.ln_v, 3, w)  # b l h 64 d
-        else:
-            gate = self.gates.repeat(4,1,1)[None]  # 1 l 64 64
-            keys = keys.view(batch_size, kv_len, -1, 1)
-            keys = F.pad(keys, (0, self.cache_size-1))  # b l hd 64
-            keys = self.matscan(keys, gate)
-            # keys = keys / keys.pow(2).mean(2, True).sqrt().add(1e-6)
-            keys = keys.unflatten(
-                2, (self.kvheads, self.emb_kq_per_head)
-            )  # b l h d 64
-            values = values.view(batch_size, kv_len, -1, 1)
-            values = F.pad(values, (0, self.cache_size-1))  # b l hd 64
-            values = self.matscan(values, gate).unflatten(
-                2, (self.kvheads, self.emb_v_per_head)
-            )  # b l h d 64
-            # values = values / values.pow(2).mean(3, True).sqrt().add(1e-6)
-            values = values.transpose(3,4)  # b l h 64 d
-
+        keys, values = self.scan(keys, values, self.plan, self.ln_k, self.ln_v, self.mlp)
+            
         # if you want to use caching and past_key_value_state is not None meaning you have values in your cache
         if (
             use_cache
@@ -590,12 +563,6 @@ class MultiHeadAttention(nn.Module):
 
         # b l h e d, b l h d 64
         attn = queries.matmul(keys)  # b l h e 64
-        # denom = torch.stack([
-        #         sink.view(batch_size, q_len, self.kvheads, expansion),
-        #         attn.logsumexp(4),
-        #     ], 4)  # b l h e 2
-        # denom = denom.logsumexp(4, True)  # b l h e 1
-        # attn = attn.sub(denom).exp()
         attn = attn.softmax(4)
         # b l h e 64, b l h 64 d
         attn = attn.matmul(values)  # b l h e d
