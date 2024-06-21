@@ -496,8 +496,8 @@ class MultiHeadAttention(nn.Module):
         # q: b l h e d
         # k: b l h c d
         # v: b l h c d
-        # keys = self.ln_k(past_key_value_state[0])
-        # values = self.ln_v(past_key_value_state[1])
+        keys = past_key_value_state[0]
+        values = past_key_value_state[1]
         queries = queries.view(batch_size, q_len, self.kvheads, -1, self.emb_kq_per_head)
         attn = queries.matmul(keys.transpose(3,4))  # b l h e c
         attn = attn.softmax(4)
