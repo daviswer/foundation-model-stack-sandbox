@@ -356,10 +356,10 @@ class MultiHeadAttention(nn.Module):
         if self.p_dropout:
             self.attn_dropout = nn.Dropout(self.p_dropout)
         self.position_encoder = position_encoder
-        self.ln_k = LayerNormParameterized(
-            emb_kq, use_high_precision_pow=True
-        )
-        self.ln_v = LayerNormParameterized(emb_v, use_high_precision_pow=True)
+        # self.ln_k = LayerNormParameterized(
+        #     emb_kq, use_high_precision_pow=True
+        # )
+        # self.ln_v = LayerNormParameterized(emb_v, use_high_precision_pow=True)
 
         self.inp_len = 0
         self.plan = None
@@ -464,7 +464,7 @@ class MultiHeadAttention(nn.Module):
                 cache[j] = cache[j].sum(2).div(2**0.5)
             
         cache = torch.cat(cache[1:], dim=1)  # b n' ...
-        cache = ln(cache)
+        # cache = ln(cache)
         cache = cache.unsqueeze(i).expand(
             *[-1] * i, inds.size(-1), *[-1] * (len(s) - i)
         )  # b n' ... h ...
@@ -552,8 +552,8 @@ class MultiHeadAttention(nn.Module):
             w = self.w(k).unsqueeze(-1)  # b l h 1
         if not self.scan_impl:
             # keys = keys.view(batch_size, kv_len, -1)
-            keys = self.scan(keys, self.plan, self.ln_k, 4, w)  # b l h d 64
-            values = self.scan(values, self.plan, self.ln_v, 3, w)  # b l h 64 d
+            keys = self.scan(keys, self.plan, None, 4, w)  # b l h d 64
+            values = self.scan(values, self.plan, None, 3, w)  # b l h 64 d
         else:
             gate = self.gates.repeat(4,1,1)[None]  # 1 l 64 64
             keys = keys.view(batch_size, kv_len, -1, 1)
