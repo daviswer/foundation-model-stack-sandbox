@@ -317,10 +317,6 @@ class MultiHeadAttention(nn.Module):
         if self.p_dropout:
             self.attn_dropout = nn.Dropout(self.p_dropout)
         self.position_encoder = position_encoder
-        self.ln_k = LayerNormParameterized(
-            emb_kq, use_high_precision_pow=True
-        )
-        self.ln_v = LayerNormParameterized(emb_v, use_high_precision_pow=True)
 
         self.inp_len = 0
         self.plan = None
@@ -342,8 +338,6 @@ class MultiHeadAttention(nn.Module):
         self.cache_size = 128 # 64
         
         self.register_buffer("ringmap", torch.arange(self.cache_size).int())
-        
-        self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
 
         self.step = 0
 
@@ -356,7 +350,7 @@ class MultiHeadAttention(nn.Module):
             elif isinstance(m, LayerNormParameterized) or isinstance(m, QKV):
                 m.reset_parameters()
 
-    def scan(self, x, plan, inds, i, w):
+    def scan(self, x, plan, inds, i):
         """
         Takes input x of shape [b n ...] and scan plan, computes recursive sums, and
         extracts cache values into the dimension specified by i > 1.
@@ -365,26 +359,18 @@ class MultiHeadAttention(nn.Module):
         """
         assert i > 1, "Output must maintain batch and seqlen in first two dimensions"
         s = x.size()
-        ws = w.size()
         # Plan and inds are formed, construct cache via recursive sums
         cache = [None for _ in plan]
         cache[1] = nn.functional.pad(x.view(s[0], s[1], -1), (0, 0, 1, 0)).view(
             s[0], s[1] + 1, *s[2:]
         )  # b n ...
-        weights = [None for _ in plan]
-        weights[1] = nn.functional.pad(w.view(s[0], s[1], -1), (0,0,1,0), value=-1000).view(
-            s[0], s[1] + 1, *ws[2:]
-        )
         for j in range(2, len(cache)):
-            weights[j] = weights[j-1].index_select(1, plan[j].view(-1)).view(s[0], -1, 2, *ws[2:])
-            weights_ = weights[j].softmax(dim=2).unsqueeze(-1)
-            weights[j] = weights[j].logsumexp(2)
             cache[j] = (
                 cache[j - 1]
                 .index_select(1, plan[j].view(-1))
                 .view(s[0], -1, 2, *s[2:])
             )
-            cache[j] = cache[j].mul(weights_).sum(2)
+            cache[j] = cache[j].mean(2)
 
         # Gather cache    
         cache = torch.cat(cache[1:], dim=1)  # b n' ...
@@ -397,16 +383,9 @@ class MultiHeadAttention(nn.Module):
         inds_ = inds_.expand(s[0], -1, *s[2:i], -1, *s[i:])  # b n ... h ...
         cache = cache.gather(1, inds_)  # b n ... h ...
         
-        # Gather final weights
-        weights = torch.cat(weights[1:], dim=1)  # b n' ...
-        inds_ = inds[-1]  # h
-        weights = weights.index_select(1, inds_)  # b h ...
-        weights = weights.view(ws[0],weights.size(1),-1).transpose(1,2)  # b -1 h
-        weights = weights.reshape(ws[0], 1, *ws[2:], -1)  # b 1 ... h
-
-        return cache, weights
+        return cache
     
-    def advance(self, cache, weights, x, w, update_ringmap=True):
+    def advance(self, cache, x, update_ringmap=True):
         # cache: b h c d
         # weights: b h c
         # x: b h d
@@ -418,20 +397,15 @@ class MultiHeadAttention(nn.Module):
         
         if key == c:
             cache[:,:,self.ringmap[-1]] = x
-            weights[:,:,self.ringmap[-1]] = w
             if update_ringmap:
                 self.ringmap = self.ringmap.roll(1)
         else:
-            w_ = weights[:,:,self.ringmap[key-1:key+1]]  # b h 2
             c_ = cache[:,:,self.ringmap[key-1:key+1]]  # b h 2 d
-            mix = w_.sub(w_.logsumexp(2, True)).exp()
-            cache[:,:,self.ringmap[key]] = c_.mul(mix.unsqueeze(3)).sum(2)
-            weights[:,:,self.ringmap[key]] = w_.mul(mix).sum(2)
+            cache[:,:,self.ringmap[key]] = c_.mean(2)
             cache[:,:,self.ringmap[key-1]] = x
-            weights[:,:,self.ringmap[key-1]] = w
             if update_ringmap:
                 self.ringmap[:key] = self.ringmap[:key].roll(1)
-        return cache, weights
+        return cache
 
     def forward(
         self,
@@ -482,22 +456,22 @@ class MultiHeadAttention(nn.Module):
             )
         
         queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
-        w = self.w(q)  # b l h
+        # w = self.w(q)  # b l h
 
         # Advance caches
         if q_len == 1:
             past_key_value_state[0], past_key_value_state[2] = self.advance(
                 past_key_value_state[0][:,0], 
-                past_key_value_state[2][:,0], 
+                # past_key_value_state[2][:,0], 
                 keys.squeeze(1),  # b h d
-                w.squeeze(1),  # b h 
+                # w.squeeze(1),  # b h 
                 False
             )
             past_key_value_state[1], past_key_value_state[3] = self.advance(
                 past_key_value_state[1][:,0],
-                past_key_value_state[3][:,0],
+                # past_key_value_state[3][:,0],
                 values.squeeze(1),  # b h d
-                w.squeeze(1),  # b h
+                # w.squeeze(1),  # b h
                 True
             )
             past_key_value_state = [x.unsqueeze(1) for x in past_key_value_state]
@@ -512,8 +486,8 @@ class MultiHeadAttention(nn.Module):
                 self.plan, self.imap = get_scan_plan(q.device, self.inp_len, self.fmap, self.cache_size)
             plan, imap = shrink_plan(self.plan, self.imap, q_len)
             # Scan
-            past_key_value_state[0], past_key_value_state[2] = self.scan(keys, plan, imap, 3, w)
-            past_key_value_state[1], past_key_value_state[3] = self.scan(values, plan, imap, 3, w)
+            past_key_value_state[0] = self.scan(keys, plan, imap, 3)
+            past_key_value_state[1] = self.scan(values, plan, imap, 3)
 
         # Advance step counter
         self.step += q_len
@@ -522,8 +496,8 @@ class MultiHeadAttention(nn.Module):
         # q: b l h e d
         # k: b l h c d
         # v: b l h c d
-        keys = self.ln_k(past_key_value_state[0])
-        values = self.ln_v(past_key_value_state[1])
+        # keys = self.ln_k(past_key_value_state[0])
+        # values = self.ln_v(past_key_value_state[1])
         queries = queries.view(batch_size, q_len, self.kvheads, -1, self.emb_kq_per_head)
         attn = queries.matmul(keys.transpose(3,4))  # b l h e c
         attn = attn.softmax(4)
