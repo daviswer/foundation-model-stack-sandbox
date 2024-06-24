@@ -15,7 +15,7 @@ from fms.distributed.tensorparallel import (
 from fms.modules.layernorm import LayerNormParameterized
 from fms.modules.positions import PositionEncoder
 from fms.modules.tp import TPModule
-from fms.triton.index_linear import IndLinear
+from fms.triton.index_linear import IndLinear, IndLinearTransposed
 
 
 def get_scan_plan(x, fmap, h):
@@ -338,6 +338,7 @@ class MultiHeadAttention(nn.Module):
             self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
 
         self.indlinear = IndLinear.apply
+        self.indlineart = IntLinearTransposed.apply
 
     def reset_parameters(self):
         for m in self.modules():
@@ -499,11 +500,7 @@ class MultiHeadAttention(nn.Module):
         # b l h e d, b n h d, l c
         attn = self.indlinear(queries, keys, self.plan[-1])  # b l h e c
         attn = attn.softmax(4)
-
-        assert False, "A dot V matmul not yet implemented!"
-
-        # b l h e c, b l h d, l c
-        attn = attn.matmul(values)  # b l h e d
+        attn = self.indlineart(attn, values, self.plan[-1])  # b l h e d
 
         attn = attn.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
         out = self.dense(attn)

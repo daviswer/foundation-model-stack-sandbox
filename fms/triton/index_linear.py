@@ -719,3 +719,41 @@ class IndLinear(torch.autograd.Function):
         B_grad = invoke_telescoping_bwd_b_kernel(A, B, M, G, config_b)
 
         return A_grad, B_grad, None
+
+
+class IndLinearTransposed(torch.autograd.Function):
+    @staticmethod
+    def forward(A,B,M):
+        config = {
+            "block_size_b": 1,
+            "block_size_m": 64,
+            "block_size_n": 64,
+            "block_size_k": 64,
+        }
+        return invoke_telescoping_bwd_a_kernel(A, B, M, config)
+
+    @staticmethod
+    def setup_context(ctx, inputs, output):
+        A,B,M = inputs
+        ctx.save_for_backward(A,B,M)
+
+    @staticmethod
+    def backward(ctx, G):
+        A,B,M = ctx.saved_tensors
+
+        config_a = {
+            "block_size_b": 1,
+            "block_size_m": 64,
+            "block_size_n": 64,
+            "block_size_k": 64,
+        }
+        A_grad = invoke_telescoping_kernel(G, B, M, config_a)
+
+        config_b = {
+            "block_size_b": 1,
+            "block_size_m": 16,
+            "block_size_e": 1,
+        }
+        B_grad = invoke_telescoping_bwd_b_kernel(G, B, M, A, config_b)
+
+        return A_grad, B_grad, None
