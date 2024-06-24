@@ -166,7 +166,7 @@ def invoke_telescoping_kernel(
 
     assert gs * h <= config["block_size_m"]
 
-    output = torch.zeros((bs, sl, h, gs, cs), dtype=A.dtype, device=A.device)
+    output = torch.empty((bs, sl, h, gs, cs), dtype=A.dtype, device=A.device)
 
     grid = lambda META: (
         triton.cdiv(bs, META["block_size_b"]),
