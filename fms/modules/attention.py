@@ -338,7 +338,7 @@ class MultiHeadAttention(nn.Module):
             self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
 
         self.indlinear = IndLinear.apply
-        self.indlineart = IntLinearTransposed.apply
+        self.indlineart = IndLinearTransposed.apply
 
     def reset_parameters(self):
         for m in self.modules():
