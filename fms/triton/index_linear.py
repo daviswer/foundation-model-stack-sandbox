@@ -550,13 +550,15 @@ def telescoping_bwd_b_kernel(
 def invoke_telescoping_bwd_b_kernel(
     A: torch.Tensor,
     B: torch.Tensor,
-    M: torch.Tensor,
     G: torch.Tensor,
+    M: torch.Tensor,
+    padded_indices_per_block: torch.Tensor,
+    value_block_mapping: torch.Tensor,
+    total_padded_indices: torch.Tensor,
     config: dict,
 ):
     assert A.is_contiguous()
     assert B.is_contiguous()
-    assert M.is_contiguous()
     assert G.is_contiguous()
 
     b, l, h, e, d = A.shape
@@ -565,12 +567,6 @@ def invoke_telescoping_bwd_b_kernel(
     # print(b, l, h, e, d, n, c)
 
     output = torch.zeros((b, n, h, d), dtype=A.dtype, device=A.device)
-
-    (
-        padded_indices_per_block,
-        value_block_mapping,
-        total_padded_indices,
-    ) = invert_mapping_gpu(M, n, config["block_size_m"])
 
     grid = lambda META: (
         triton.cdiv(b, META["block_size_b"]),
@@ -686,7 +682,7 @@ def invert_mapping_gpu(
 
 class IndLinear(torch.autograd.Function):
     @staticmethod
-    def forward(A,B,M):
+    def forward(A,B,M,Mp,Mv,Mt):
         config = {
             "block_size_b": 1,
             "block_size_m": 64,
@@ -697,12 +693,12 @@ class IndLinear(torch.autograd.Function):
 
     @staticmethod
     def setup_context(ctx, inputs, output):
-        A,B,M = inputs
-        ctx.save_for_backward(A,B,M)
+        A,B,M,Mp,Mv,Mt = inputs
+        ctx.save_for_backward(A,B,M,Mp,Mv,Mt)
 
     @staticmethod
     def backward(ctx, G):
-        A,B,M = ctx.saved_tensors
+        A,B,M,Mp,Mv,Mt = ctx.saved_tensors
 
         config_a = {
             "block_size_b": 1,
@@ -717,14 +713,14 @@ class IndLinear(torch.autograd.Function):
             "block_size_m": 16,
             "block_size_e": 1,
         }
-        B_grad = invoke_telescoping_bwd_b_kernel(A, B, M, G, config_b)
+        B_grad = invoke_telescoping_bwd_b_kernel(A, B, G, M, Mp, Mv, Mt, config_b)
 
         return A_grad, B_grad, None
 
 
 class IndLinearTransposed(torch.autograd.Function):
     @staticmethod
-    def forward(A,B,M):
+    def forward(A,B,M,Mp,Mv,Mt):
         config = {
             "block_size_b": 1,
             "block_size_m": 64,
@@ -735,12 +731,12 @@ class IndLinearTransposed(torch.autograd.Function):
 
     @staticmethod
     def setup_context(ctx, inputs, output):
-        A,B,M = inputs
-        ctx.save_for_backward(A,B,M)
+        A,B,M,Mp,Mv,Mt = inputs
+        ctx.save_for_backward(A,B,M,Mp,Mv,Mt)
 
     @staticmethod
     def backward(ctx, G):
-        A,B,M = ctx.saved_tensors
+        A,B,M,Mp,Mv,Mt = ctx.saved_tensors
 
         config_a = {
             "block_size_b": 1,
@@ -755,6 +751,6 @@ class IndLinearTransposed(torch.autograd.Function):
             "block_size_m": 16,
             "block_size_e": 1,
         }
-        B_grad = invoke_telescoping_bwd_b_kernel(G, B, M, A, config_b)
+        B_grad = invoke_telescoping_bwd_b_kernel(G, B, A, M, Mp, Mv, Mt, config_b)
 
         return A_grad, B_grad, None

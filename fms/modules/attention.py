@@ -15,7 +15,7 @@ from fms.distributed.tensorparallel import (
 from fms.modules.layernorm import LayerNormParameterized
 from fms.modules.positions import PositionEncoder
 from fms.modules.tp import TPModule
-from fms.triton.index_linear import IndLinear, IndLinearTransposed
+from fms.triton.index_linear import IndLinear, IndLinearTransposed, invert_mapping_gpu
 
 
 def get_scan_plan(x, fmap, h):
@@ -307,6 +307,7 @@ class MultiHeadAttention(nn.Module):
         self.ln_v = LayerNormParameterized(emb_v, use_high_precision_pow=True)
 
         self.inp_len = 0
+        self.cache_len = 0
         self.plan = None
 
         # fmap = {8 - i: 64 - (i) ** 2 for i in range(8)}
@@ -339,6 +340,9 @@ class MultiHeadAttention(nn.Module):
 
         self.indlinear = IndLinear.apply
         self.indlineart = IndLinearTransposed.apply
+        self.Mv = None
+        self.Mp = None
+        self.Mt = None
 
     def reset_parameters(self):
         for m in self.modules():
@@ -480,6 +484,18 @@ class MultiHeadAttention(nn.Module):
         keys = self.scan(keys, self.plan, self.ln_k, 4, w)  # b n h d
         values = self.scan(values, self.plan, self.ln_v, 3, w)  # b n h d
 
+        # if you built a new scan plan, invert the plan for use by backward kernels
+        if keys.size(1) != self.cache_len:
+            self.cache_len = keys.size(1)
+            (
+                padded_indices_per_block,
+                value_block_mapping,
+                total_padded_indices,
+            ) = invert_mapping_gpu(self.plan, keys.size(1), 16)
+            self.Mp = padded_indices_per_block
+            self.Mv = value_block_mapping
+            self.Mt = total_padded_indices
+
         # if you want to use caching and past_key_value_state is not None meaning you have values in your cache
         if (
             use_cache
@@ -498,9 +514,23 @@ class MultiHeadAttention(nn.Module):
         queries = queries.unflatten(2, (self.kvheads, expansion))  # b l h e d
 
         # b l h e d, b n h d, l c
-        attn = self.indlinear(queries.to(dtype=torch.float16), keys.to(dtype=torch.float16), self.plan[-1])  # b l h e c
+        attn = self.indlinear(
+            queries.to(dtype=torch.float16), 
+            keys.to(dtype=torch.float16), 
+            self.plan[-1],
+            self.Mp,
+            self.Mv,
+            self.Mt
+        )  # b l h e c
         attn = attn.softmax(4)
-        attn = self.indlineart(attn, values.to(dtype=torch.float16), self.plan[-1])  # b l h e d
+        attn = self.indlineart(
+            attn, 
+            values.to(dtype=torch.float16), 
+            self.plan[-1],
+            self.Mp,
+            self.Mv,
+            self.Mt,
+        )  # b l h e d
 
         attn = attn.to(dtype=torch.bfloat16).reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
         out = self.dense(attn)
