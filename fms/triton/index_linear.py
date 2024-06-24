@@ -715,7 +715,7 @@ class IndLinear(torch.autograd.Function):
         }
         B_grad = invoke_telescoping_bwd_b_kernel(A, B, G, M, Mp, Mv, Mt, config_b)
 
-        return A_grad, B_grad, None
+        return A_grad, B_grad, None, None, None, None
 
 
 class IndLinearTransposed(torch.autograd.Function):
@@ -753,4 +753,4 @@ class IndLinearTransposed(torch.autograd.Function):
         }
         B_grad = invoke_telescoping_bwd_b_kernel(G, B, A, M, Mp, Mv, Mt, config_b)
 
-        return A_grad, B_grad, None
+        return A_grad, B_grad, None, None, None, None
