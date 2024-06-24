@@ -124,8 +124,8 @@ def telescoping_kernel(
             (block_size_b * block_size_l, block_size_k, block_size_n),
         )
         # We accumulate along the K dimension.
-        accumulator += tl.dot(a, b)
         assert False, "GOTHERE"
+        accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block.
         a_ptrs += block_size_k * stride_ak
         b_ptrs += block_size_k * stride_bk
