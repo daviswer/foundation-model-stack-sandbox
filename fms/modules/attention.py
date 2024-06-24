@@ -499,7 +499,6 @@ class MultiHeadAttention(nn.Module):
 
         # b l h e d, b n h d, l c
         attn = self.indlinear(queries, keys, self.plan[-1])  # b l h e c
-        print("GOTHERE")
         attn = attn.softmax(4)
         attn = self.indlineart(attn, values, self.plan[-1])  # b l h e d
 

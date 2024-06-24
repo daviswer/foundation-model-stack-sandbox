@@ -320,7 +320,6 @@ class LLaMA(nn.Module):
         # this is the output cache for all the decoder layers
         present_key_value_states = []
 
-        print("Enter attn stack")
         for i, layer in enumerate(self.layers):
             output = layer(
                 x=x_in,
@@ -356,7 +355,6 @@ class LLaMA(nn.Module):
         only_last_token=False,
         attn_algorithm=None,
     ):
-        print("Enter model")
         output, cache = self._helper(
             x, mask, position_ids, past_key_value_states, use_cache, attn_algorithm
         )
