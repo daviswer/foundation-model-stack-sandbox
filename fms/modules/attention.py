@@ -491,7 +491,7 @@ class MultiHeadAttention(nn.Module):
                 padded_indices_per_block,
                 value_block_mapping,
                 total_padded_indices,
-            ) = invert_mapping_gpu(self.plan, keys.size(1), 16)
+            ) = invert_mapping_gpu(self.plan[-1], keys.size(1), 16)
             self.Mp = padded_indices_per_block
             self.Mv = value_block_mapping
             self.Mt = total_padded_indices
