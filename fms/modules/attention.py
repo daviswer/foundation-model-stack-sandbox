@@ -389,7 +389,7 @@ class MultiHeadAttention(nn.Module):
         self.cache_size = 128
 
         self.mlp = nn.Sequential(
-            nn.Linear(2*self.kvheads*self.emb_kq_per_head, self.emb_kq_per_head, bias=self.use_bias),
+            nn.Linear(self.kvheads*self.emb_kq_per_head, self.emb_kq_per_head, bias=self.use_bias),
             nn.SiLU(),
             nn.Linear(self.emb_kq_per_head, 2*self.kvheads, bias=self.use_bias)
         )
@@ -432,7 +432,7 @@ class MultiHeadAttention(nn.Module):
                 .index_select(1, plan[j].view(-1))
                 .view(b, -1, 2, h, d_k)
             )
-            weights = mlp(cache_k[j].view(b,-1,2*h*d_k)).view(b,-1,2,h,1).softmax(2)  # b n' 2 h 1
+            weights = mlp(cache_k[j].view(b,-1,2,h*d_k).prod(2)).view(b,-1,2,h,1).softmax(2)  # b n' 2 h 1
             cache_k[j] = cache_k[j].mul(weights).sum(2)  # b n' h d
             cache_v[j] = (
                 cache_v[j - 1]
