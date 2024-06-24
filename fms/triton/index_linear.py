@@ -379,9 +379,9 @@ def invoke_telescoping_bwd_a_kernel(
     total_blocks_m = triton.cdiv(sl * h * gs, config["block_size_m"])
     total_blocks_n = triton.cdiv(cs, config["block_size_n"])
 
-    print(f"{total_blocks_bs=}")
-    print(f"{total_blocks_m=}")
-    print(f"{total_blocks_n=}")
+    # print(f"{total_blocks_bs=}")
+    # print(f"{total_blocks_m=}")
+    # print(f"{total_blocks_n=}")
 
     block_size_l = config["block_size_m"] // gs
     telescoping_bwd_a_kernel[grid](
@@ -562,7 +562,7 @@ def invoke_telescoping_bwd_b_kernel(
     b, l, h, e, d = A.shape
     _, n, _, _ = B.shape
     _, c = M.shape
-    print(b, l, h, e, d, n, c)
+    # print(b, l, h, e, d, n, c)
 
     output = torch.zeros((b, n, h, d), dtype=A.dtype, device=A.device)
 
