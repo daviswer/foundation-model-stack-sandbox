@@ -125,11 +125,11 @@ def telescoping_kernel(
         )
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
+        assert False, "GOTHERE"
         # Advance the ptrs to the next K block.
         a_ptrs += block_size_k * stride_ak
         b_ptrs += block_size_k * stride_bk
 
-    assert False, "GOTHERE"
     # -----------------------------------------------------------
     # Write back the block of the output
     offs_om = pid_m * block_size_m + tl.arange(0, block_size_m)
