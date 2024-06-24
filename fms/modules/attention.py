@@ -461,7 +461,7 @@ class MultiHeadAttention(nn.Module):
             if weighted:
                 cache[j] = cache[j].mul(weights_).sum(2)
             else:
-                cache[j] = cache[j].sum(2).div(2**0.5)
+                cache[j] = cache[j].mean(2)
             
         cache = torch.cat(cache[1:], dim=1)  # b n' ...
         # cache = ln(cache)
