@@ -395,7 +395,11 @@ class MultiHeadAttention(nn.Module):
 
         self.weighted = True
         if self.weighted:
-            self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
+            self.w = nn.Sequential(
+                nn.Linear(self.emb_dim, self.emb_kq_per_head, bias=False),
+                nn.SiLU(),
+                nn.Linear(self.emb_kq_per_head, self.kvheads, bias=False),
+            )
 
     def reset_parameters(self):
         for m in self.modules():
