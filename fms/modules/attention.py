@@ -121,6 +121,9 @@ def get_scan_plan(x, fmap, h):
             plan[levels[i] + 1] = torch.cat(
                 [plan[levels[i] + 1], prev[:, 1][None]], dim=0
             )
+    # Sink correction
+    inds[:,-1,0] = 1
+    inds[:,-1,1] = 1
     # Flatten inds (indexing into flattened plan/cache) (n h)
     ls = [p.size(0) for p in plan]
     ls = [0] + ls[:-1]
