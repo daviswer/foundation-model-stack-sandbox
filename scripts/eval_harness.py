@@ -134,10 +134,10 @@ else:
 c = LLaMAConfig(
     src_vocab_size=128256,
     nlayers=24,
-    nheads=32,
-    kvheads=2,
+    nheads=16,
+    kvheads=8,
     emb_dim=2048,
-    hidden_grow_factor=3.75,
+    hidden_grow_factor=3.5,
     max_expected_seq_len=4096,
 )
 model = LLaMA(c)
