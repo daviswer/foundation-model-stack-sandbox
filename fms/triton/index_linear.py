@@ -18,6 +18,14 @@ def col_major(pid, m, n, block_m: tl.constexpr, block_n: tl.constexpr):
 
 
 @triton.jit()
+def tile_schedule(pid, NUM_SM: tl.constexpr, total_tiles: tl.constexpr):
+    start = (pid * total_tiles) // NUM_SM
+    end = ((pid + 1) * total_tiles) // NUM_SM
+
+    return start, end
+
+
+@triton.jit()
 def telescoping_kernel(
     # Pointers to matrices
     a_ptr,
@@ -451,7 +459,6 @@ def telescoping_bwd_b_kernel(
     # Meta-parameters
     block_size_b: tl.constexpr,
     block_size_m: tl.constexpr,
-    block_size_e: tl.constexpr,
 ):
     """ """
 
@@ -461,7 +468,6 @@ def telescoping_bwd_b_kernel(
 
     pid_b = tl.program_id(axis=0)
     pid_m = tl.program_id(axis=1)
-    pid_e = tl.program_id(axis=2)
 
     total_padded_indices = tl.load(total_padded_indices_ptr)
 
@@ -486,8 +492,6 @@ def telescoping_bwd_b_kernel(
         + offs_b[:, None, None, None] * stride_ab
         + offs_l[None, None, None, :] * stride_al
         + offs_h[None, :, None, None] * stride_ah
-        # + offs_e[None, None, None, None, :] * stride_ae
-        + pid_e * block_size_e * stride_ae
         + offs_d[None, None, :, None] * stride_ad
     )
 
@@ -499,36 +503,38 @@ def telescoping_bwd_b_kernel(
         + offs_b[:, None, None, None] * stride_bb
         + offs_l[None, None, :, None] * stride_bl
         + offs_h[None, :, None, None] * stride_bh
-        # + offs_e[None, None, None, :, None] * stride_be
-        + pid_e * block_size_e * stride_ae
         + offs_c[None, None, :, None] * stride_bc
         + offs_pad[None, None, None, :]
     )
 
     # Mul/add
-    a = tl.reshape(
-        tl.load(
-            a_ptrs,
-            mask=m_idxs_mask[None, None, None, :],
-            other=0.0,
-        ),
-        (block_size_b * H, D, block_size_m),
-    )
-    # tl.static_print(b_ptrs.shape, m_idxs_mask.shape)
-    b = tl.reshape(
-        tl.load(
-            b_ptrs,
-            mask=(offs_pad[None, None, None, :] == 0)
-            & m_idxs_mask[None, None, :, None],
-            other=0.0,
-        ),
-        (block_size_b * H, block_size_m, 16),
-    )
-    # We accumulate along the K dimension.
-    # tl.device_print("a", a)
-    # tl.device_print("b", b)
-    # o_block = tl.sum(a * b[:, :, :, None], 2)  # b' z_h d'
-    o_block = tl.dot(a, b)
+    accumulator = tl.zeros((block_size_b * H, D, 16), dtype=tl.float32)
+    for e in range(0, E):
+        a = tl.reshape(
+            tl.load(
+                a_ptrs,
+                mask=m_idxs_mask[None, None, None, :],
+                other=0.0,
+            ),
+            (block_size_b * H, D, block_size_m),
+        )
+        # tl.static_print(b_ptrs.shape, m_idxs_mask.shape)
+        b = tl.reshape(
+            tl.load(
+                b_ptrs,
+                mask=(offs_pad[None, None, None, :] == 0)
+                & m_idxs_mask[None, None, :, None],
+                other=0.0,
+            ),
+            (block_size_b * H, block_size_m, 16),
+        )
+        # We accumulate along the K dimension.
+        # tl.device_print("a", a)
+        # tl.device_print("b", b)
+        # o_block = tl.sum(a * b[:, :, :, None], 2)  # b' z_h d'
+        accumulator += tl.dot(a, b)
+        a_ptrs += stride_ae
+        b_ptrs += stride_be
 
     # Write O block
     value_idx = tl.load(value_block_mapping_ptr + pid_m)
@@ -542,7 +548,7 @@ def telescoping_bwd_b_kernel(
     )
     tl.atomic_add(
         o_ptrs,
-        o_block.reshape(block_size_b, H, D, 16),
+        accumulator.reshape(block_size_b, H, D, 16),
         mask=(offs_pad[None, None, None, :] == 0),
     )
 
@@ -571,7 +577,6 @@ def invoke_telescoping_bwd_b_kernel(
     grid = lambda META: (
         triton.cdiv(b, META["block_size_b"]),
         triton.cdiv(padded_indices_per_block.shape[0], META["block_size_m"]),
-        triton.cdiv(e, META["block_size_e"]),
     )
 
     telescoping_bwd_b_kernel[grid](
@@ -682,7 +687,7 @@ def invert_mapping_gpu(
 
 class IndLinear(torch.autograd.Function):
     @staticmethod
-    def forward(A,B,M,Mp,Mv,Mt):
+    def forward(A, B, M, Mp, Mv, Mt):
         config = {
             "block_size_b": 1,
             "block_size_m": 64,
@@ -693,12 +698,12 @@ class IndLinear(torch.autograd.Function):
 
     @staticmethod
     def setup_context(ctx, inputs, output):
-        A,B,M,Mp,Mv,Mt = inputs
-        ctx.save_for_backward(A,B,M,Mp,Mv,Mt)
+        A, B, M, Mp, Mv, Mt = inputs
+        ctx.save_for_backward(A, B, M, Mp, Mv, Mt)
 
     @staticmethod
     def backward(ctx, G):
-        A,B,M,Mp,Mv,Mt = ctx.saved_tensors
+        A, B, M, Mp, Mv, Mt = ctx.saved_tensors
 
         config_a = {
             "block_size_b": 1,
@@ -710,8 +715,7 @@ class IndLinear(torch.autograd.Function):
 
         config_b = {
             "block_size_b": 1,
-            "block_size_m": 32,
-            "block_size_e": 1,
+            "block_size_m": 16,
         }
         B_grad = invoke_telescoping_bwd_b_kernel(A, B, G, M, Mp, Mv, Mt, config_b)
 
@@ -720,7 +724,7 @@ class IndLinear(torch.autograd.Function):
 
 class IndLinearTransposed(torch.autograd.Function):
     @staticmethod
-    def forward(A,B,M,Mp,Mv,Mt):
+    def forward(A, B, M, Mp, Mv, Mt):
         config = {
             "block_size_b": 1,
             "block_size_m": 64,
@@ -731,12 +735,12 @@ class IndLinearTransposed(torch.autograd.Function):
 
     @staticmethod
     def setup_context(ctx, inputs, output):
-        A,B,M,Mp,Mv,Mt = inputs
-        ctx.save_for_backward(A,B,M,Mp,Mv,Mt)
+        A, B, M, Mp, Mv, Mt = inputs
+        ctx.save_for_backward(A, B, M, Mp, Mv, Mt)
 
     @staticmethod
     def backward(ctx, G):
-        A,B,M,Mp,Mv,Mt = ctx.saved_tensors
+        A, B, M, Mp, Mv, Mt = ctx.saved_tensors
 
         config_a = {
             "block_size_b": 1,
@@ -748,8 +752,7 @@ class IndLinearTransposed(torch.autograd.Function):
 
         config_b = {
             "block_size_b": 1,
-            "block_size_m": 32,
-            "block_size_e": 1,
+            "block_size_m": 16,
         }
         B_grad = invoke_telescoping_bwd_b_kernel(G, B, A, M, Mp, Mv, Mt, config_b)
 
