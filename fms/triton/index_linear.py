@@ -709,7 +709,7 @@ class IndLinear(torch.autograd.Function):
             "block_size_b": 1,
             "block_size_m": 64,
             "block_size_n": 64,
-            "block_size_k": 64,
+            "block_size_k": 32,
         }
         return invoke_telescoping_kernel(A, B, M, config)
 
@@ -726,7 +726,7 @@ class IndLinear(torch.autograd.Function):
             "block_size_b": 1,
             "block_size_m": 64,
             "block_size_n": 64,
-            "block_size_k": 64,
+            "block_size_k": 32,
         }
         A_grad = invoke_telescoping_bwd_a_kernel(G, B, M, config_a)
 
@@ -746,7 +746,7 @@ class IndLinearTransposed(torch.autograd.Function):
             "block_size_b": 1,
             "block_size_m": 64,
             "block_size_n": 64,
-            "block_size_k": 64,
+            "block_size_k": 32,
         }
         return invoke_telescoping_bwd_a_kernel(A, B, M, config)
 
@@ -763,7 +763,7 @@ class IndLinearTransposed(torch.autograd.Function):
             "block_size_b": 1,
             "block_size_m": 64,
             "block_size_n": 64,
-            "block_size_k": 64,
+            "block_size_k": 32,
         }
         A_grad = invoke_telescoping_kernel(G, B, M, config_a)
 
