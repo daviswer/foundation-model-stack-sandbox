@@ -393,7 +393,7 @@ class MultiHeadAttention(nn.Module):
             self.register_buffer("gates", self.make_gates())
             self.matscan = MatScan.apply
 
-        self.weighted = True
+        self.weighted = False
         if self.weighted:
             self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
 
@@ -461,7 +461,7 @@ class MultiHeadAttention(nn.Module):
             if weighted:
                 cache[j] = cache[j].mul(weights_).sum(2)
             else:
-                cache[j] = cache[j].sum(2).div(2**0.5)
+                cache[j] = cache[j][:,:,0]
             
         cache = torch.cat(cache[1:], dim=1)  # b n' ...
         # cache = ln(cache)
