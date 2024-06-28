@@ -393,7 +393,7 @@ class MultiHeadAttention(nn.Module):
             self.register_buffer("gates", self.make_gates())
             self.matscan = MatScan.apply
 
-        self.weighted = True
+        self.weighted = False
         if self.weighted:
             self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
 
@@ -534,42 +534,30 @@ class MultiHeadAttention(nn.Module):
             queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
             keys = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
             values = v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
-            # sink = queries.sum(3)  # b l he
-
+            
             # You want to apply rotary embeddings pre-cache
             if self.position_encoder is not None:
                 queries, keys = self.position_encoder.adjusted_qk(
                     queries, keys, position_ids, past_key_value_state, use_cache
                 )
 
-        queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
-        # sink = sink / (self.emb_kq_per_head**0.5)
+        # Expand kv so black-box attn will work
+        expansion = self.nheads // self.kvheads
+        queries = queries / (self.emb_kq_per_head**0.5)
+        queries = queries.unflatten(2, (self.kvheads, expansion))  # b l h e d
 
         # Build telescoping cache
         # k/v: b l h d
-        w = None
-        if self.weighted:
-            w = self.w(k).unsqueeze(-1)  # b l h 1
-        if not self.scan_impl:
-            # keys = keys.view(batch_size, kv_len, -1)
-            keys = self.scan(keys, self.plan, None, 4, w)  # b l h d 64
-            values = self.scan(values, self.plan, None, 3, w)  # b l h 64 d
-        else:
-            gate = self.gates.repeat(4,1,1)[None]  # 1 l 64 64
-            keys = keys.view(batch_size, kv_len, -1, 1)
-            keys = F.pad(keys, (0, self.cache_size-1))  # b l hd 64
-            keys = self.matscan(keys, gate)
-            # keys = keys / keys.pow(2).mean(2, True).sqrt().add(1e-6)
-            keys = keys.unflatten(
-                2, (self.kvheads, self.emb_kq_per_head)
-            )  # b l h d 64
-            values = values.view(batch_size, kv_len, -1, 1)
-            values = F.pad(values, (0, self.cache_size-1))  # b l hd 64
-            values = self.matscan(values, gate).unflatten(
-                2, (self.kvheads, self.emb_v_per_head)
-            )  # b l h d 64
-            # values = values / values.pow(2).mean(3, True).sqrt().add(1e-6)
-            values = values.transpose(3,4)  # b l h 64 d
+        window = self.fmap[1]//4*4
+        q_fold = queries.view(batch_size, 1, q_len, -1)  # b 1 l hed
+        q_fold = F.unfold(q_fold, (window,1), padding=(window-1,0))  # b w (l+w-1)hed
+        q_fold = q_fold.view(batch_size, window, q_len+window-1, 
+                             self.kvheads, expansion, self.emb_kq_per_head)[:,:,window-1:]  # b w l h e d
+        w = keys[:,None,:,:,None].mul(q_fold).sum(-1)  # b w l h e
+        w = w.logsumexp(1).logsumexp(-1).unsqueeze(-1)  # b l h 1
+        
+        keys = self.scan(keys, self.plan, None, 4, w)  # b l h d 64
+        values = self.scan(values, self.plan, None, 3, w)  # b l h 64 d
 
         # if you want to use caching and past_key_value_state is not None meaning you have values in your cache
         if (
@@ -584,9 +572,6 @@ class MultiHeadAttention(nn.Module):
                 keys = past_key_value_state[0]
                 values = past_key_value_state[1]
 
-        # Expand kv so black-box attn will work
-        expansion = self.nheads // self.kvheads
-        queries = queries.unflatten(2, (self.kvheads, expansion))  # b l h e d
 
         # b l h e d, b l h d 64
         attn = queries.matmul(keys)  # b l h e 64
