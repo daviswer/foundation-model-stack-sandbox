@@ -317,10 +317,6 @@ class MultiHeadAttention(nn.Module):
         if self.p_dropout:
             self.attn_dropout = nn.Dropout(self.p_dropout)
         self.position_encoder = position_encoder
-        self.ln_k = LayerNormParameterized(
-            emb_kq, use_high_precision_pow=True
-        )
-        self.ln_v = LayerNormParameterized(emb_v, use_high_precision_pow=True)
 
         self.inp_len = 0
         self.plan = None
@@ -522,8 +518,8 @@ class MultiHeadAttention(nn.Module):
         # q: b l h e d
         # k: b l h c d
         # v: b l h c d
-        keys = self.ln_k(past_key_value_state[0])
-        values = self.ln_v(past_key_value_state[1])
+        keys = past_key_value_state[0]
+        values = past_key_value_state[1]
         queries = queries.view(batch_size, q_len, self.kvheads, -1, self.emb_kq_per_head)
         attn = queries.matmul(keys.transpose(3,4))  # b l h e c
         attn = attn.softmax(4)
