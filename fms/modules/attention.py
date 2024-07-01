@@ -394,7 +394,8 @@ class MultiHeadAttention(nn.Module):
                 cache[j] = cache[j].sum(2).div(2**0.5)
             
         cache = torch.cat(cache[1:], dim=1)  # b n' ...
-        cache = ln(cache)
+        if ln is not None:
+            cache = ln(cache)
         return cache
         # cache = cache.unsqueeze(i).expand(
         #     *[-1] * i, inds.size(-1), *[-1] * (len(s) - i)
