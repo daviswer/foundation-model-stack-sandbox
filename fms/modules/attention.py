@@ -370,7 +370,7 @@ class MultiHeadAttention(nn.Module):
                 .index_select(1, plan[j].view(-1))
                 .view(s[0], -1, 2, *s[2:])
             )
-            cache[j] = cache[j].mean(2)
+            cache[j] = cache[j][:,:,0] #.mean(2)
 
         # Gather cache    
         cache = torch.cat(cache[1:], dim=1)  # b n' ...
@@ -400,8 +400,8 @@ class MultiHeadAttention(nn.Module):
             if update_ringmap:
                 self.ringmap = self.ringmap.roll(1)
         else:
-            c_ = cache[:,:,self.ringmap[key-1:key+1]]  # b h 2 d
-            cache[:,:,self.ringmap[key]] = c_.mean(2)
+            # c_ = cache[:,:,self.ringmap[key-1:key+1]]  # b h 2 d
+            # cache[:,:,self.ringmap[key]] = c_.mean(2)
             cache[:,:,self.ringmap[key-1]] = x
             if update_ringmap:
                 self.ringmap[:key] = self.ringmap[:key].roll(1)
