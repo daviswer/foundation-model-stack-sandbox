@@ -523,9 +523,9 @@ class MultiHeadAttention(nn.Module):
             self.Mv,
             self.Mt
         )  # b l h e c
-        attn = attn.softmax(4)
+        attn = attn.to(dtype=torch.float32).softmax(4)
         attn = self.indlineart(
-            attn, 
+            attn.to(dtype=torch.float16), 
             values.to(dtype=torch.float16), 
             self.plan[-1],
             self.Mp,
