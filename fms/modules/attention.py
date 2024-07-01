@@ -301,10 +301,10 @@ class MultiHeadAttention(nn.Module):
         if self.p_dropout:
             self.attn_dropout = nn.Dropout(self.p_dropout)
         self.position_encoder = position_encoder
-        self.ln_k = LayerNormParameterized(
-            emb_kq, use_high_precision_pow=True
-        )
-        self.ln_v = LayerNormParameterized(emb_v, use_high_precision_pow=True)
+        # self.ln_k = LayerNormParameterized(
+        #     emb_kq, use_high_precision_pow=True
+        # )
+        # self.ln_v = LayerNormParameterized(emb_v, use_high_precision_pow=True)
 
         self.inp_len = 0
         self.cache_len = 0
@@ -481,8 +481,8 @@ class MultiHeadAttention(nn.Module):
         w = None
         if self.weighted:
             w = self.w(k).unsqueeze(-1)  # b l h 1
-        keys = self.scan(keys, self.plan, self.ln_k, 4, w)  # b n h d
-        values = self.scan(values, self.plan, self.ln_v, 3, w)  # b n h d
+        keys = self.scan(keys, self.plan, None, 4, w)  # b n h d
+        values = self.scan(values, self.plan, None, 3, w)  # b n h d
 
         # if you built a new scan plan, invert the plan for use by backward kernels
         if keys.size(1) != self.cache_len:
