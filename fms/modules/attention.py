@@ -413,7 +413,7 @@ class MultiHeadAttention(nn.Module):
         # w: b h
         c = self.cache_size
         powers = (2**torch.arange(10, device=cache.device))
-        ilevel = (self.step%powers).sub(powers-1).sign().add(1).sum().item()
+        ilevel = ((self.step-1)%powers).sub(powers-1).sign().add(1).sum().item()
         key = self.fmap.get(ilevel, c)
         
         if key == c:
