@@ -338,10 +338,9 @@ class MultiHeadAttention(nn.Module):
         self.cache_size = 128 # 64
         
         self.register_buffer("ringmap", torch.arange(self.cache_size).int())
-        
-        self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
 
         self.step = 0
+        self.qstep = 0
 
     def reset_parameters(self):
         for m in self.modules():
@@ -414,7 +413,7 @@ class MultiHeadAttention(nn.Module):
         
         if key == c:
             cache[:,:,self.ringmap[-1]] = x
-            weights[:,:,self.ringmap[-1]] = w
+            weights[:,:,self.ringmap[23]] = w
             if update_ringmap:
                 self.ringmap = self.ringmap.roll(1)
         else:
@@ -424,7 +423,7 @@ class MultiHeadAttention(nn.Module):
             cache[:,:,self.ringmap[key]] = c_.mul(mix.unsqueeze(3)).sum(2)
             weights[:,:,self.ringmap[key]] = w_.mul(mix).sum(2)
             cache[:,:,self.ringmap[key-1]] = x
-            weights[:,:,self.ringmap[key-1]] = w
+            weights[:,:,self.ringmap[23]] = w
             if update_ringmap:
                 self.ringmap[:key] = self.ringmap[:key].roll(1)
         return cache, weights
@@ -478,38 +477,53 @@ class MultiHeadAttention(nn.Module):
             )
         
         queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
-        w = self.w(q)  # b l h
 
         # Advance caches
         if q_len == 1:
+            past_key_value_state[4][:,0,self.qstep] = queries.view(batch_size, self.kvheads, -1, self.emb_kq_per_head)  # b 1 24 h e d
+            new_w = past_key_value_state[0][:,0,:,self.ringmap[23]]  # b h d
+            new_w = new_w.unsqueeze(2).unsqueeze(1).mul(past_key_value_state[4][:,0]).sum(-1)  # b 24 h e
+            new_w = new_w.logsumexp(3).logsumexp(1)  # b h
             past_key_value_state[0], past_key_value_state[2] = self.advance(
                 past_key_value_state[0][:,0], 
                 past_key_value_state[2][:,0], 
                 keys.squeeze(1),  # b h d
-                w.squeeze(1),  # b h 
+                new_w,  # b h
                 False
             )
             past_key_value_state[1], past_key_value_state[3] = self.advance(
                 past_key_value_state[1][:,0],
                 past_key_value_state[3][:,0],
                 values.squeeze(1),  # b h d
-                w.squeeze(1),  # b h
+                new_w,  # b h
                 True
             )
+            past_key_value_state[4] = past_key_value_state[4][:,0]
             past_key_value_state = [x.unsqueeze(1) for x in past_key_value_state]
+            self.qstep = (self.qstep + 1) % 24
         else:
             # Reset caches
-            past_key_value_state = [None,] * 4
+            past_key_value_state = [None,] * 5
             self.step = 0
+            self.qstep = 0
             self.ringmap = torch.ones_like(self.ringmap).cumsum(0).sub(1)
             # Generate plan by truncating master plan - generate new master if needed
             if q_len > self.inp_len:
                 self.inp_len = 2**(q_len-1).bit_length()
                 self.plan, self.imap = get_scan_plan(q.device, self.inp_len, self.fmap, self.cache_size)
             plan, imap = shrink_plan(self.plan, self.imap, q_len)
+            # Build query windows
+            window = self.fmap[1]//4*4
+            q_fold = queries.view(batch_size, 1, q_len, -1)  # b 1 l hed
+            q_fold = F.unfold(q_fold, (window,1), padding=(window-1,0))  # b w (l+w-1)hed
+            q_fold = q_fold.view(batch_size, window, q_len+window-1, 
+                                self.kvheads, -1, self.emb_kq_per_head)[:,:,window-1:]  # b w l h e d
+            w = keys[:,None,:,:,None].mul(q_fold).sum(-1)  # b w l h e
+            w = w.logsumexp(1).logsumexp(-1)  # b l h
             # Scan
             past_key_value_state[0], past_key_value_state[2] = self.scan(keys, plan, imap, 3, w)
             past_key_value_state[1], past_key_value_state[3] = self.scan(values, plan, imap, 3, w)
+            past_key_value_state[4] = queries.view(batch_size, q_len, self.kvheads, -1, self.emb_kq_per_head)[:,-24:].unsqueeze(1)  # b 1 24 h e d
 
         # Advance step counter
         self.step += q_len
