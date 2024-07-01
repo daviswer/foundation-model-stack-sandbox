@@ -66,6 +66,9 @@ def get_scan_plan(device, n, fmap, h):
             plan[levels[i] + 1] = torch.cat(
                 [plan[levels[i] + 1], prev[:, 1][None]], dim=0
             )
+    # Sink correction
+    inds[:,-1,0] = 1
+    inds[:,-1,1] = 1
     return plan, inds
 
 
@@ -413,10 +416,10 @@ class MultiHeadAttention(nn.Module):
         key = self.fmap.get(ilevel, c)
         
         if key == c:
-            cache[:,:,self.ringmap[-1]] = x
-            weights[:,:,self.ringmap[-1]] = w
+            cache[:,:,self.ringmap[-2]] = x
+            weights[:,:,self.ringmap[-2]] = w
             if update_ringmap:
-                self.ringmap = self.ringmap.roll(1)
+                self.ringmap[:-1] = self.ringmap[:-1].roll(1)
         else:
             w_ = weights[:,:,self.ringmap[key-1:key+1]]  # b h 2
             c_ = cache[:,:,self.ringmap[key-1:key+1]]  # b h 2 d
