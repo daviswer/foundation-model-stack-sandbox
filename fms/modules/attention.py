@@ -373,7 +373,7 @@ class MultiHeadAttention(nn.Module):
         )
         for j in range(2, len(cache)):
             weights[j] = weights[j-1].index_select(1, plan[j].view(-1)).view(s[0], -1, 2, *ws[2:])
-            weights_ = weights[j].softmax(dim=2).unsqueeze(-1)
+            weights_ = weights[j].mul(1000).softmax(dim=2).unsqueeze(-1)
             weights[j] = weights[j].logsumexp(2)
             cache[j] = (
                 cache[j - 1]
@@ -420,9 +420,8 @@ class MultiHeadAttention(nn.Module):
         else:
             w_ = weights[:,:,self.ringmap[key-1:key+1]]  # b h 2
             c_ = cache[:,:,self.ringmap[key-1:key+1]]  # b h 2 d
-            mix = w_.sub(w_.logsumexp(2, True)).exp()
-            cache[:,:,self.ringmap[key]] = c_.mul(mix.unsqueeze(3)).sum(2)
-            weights[:,:,self.ringmap[key]] = w_.mul(mix).sum(2)
+            cache[:,:,self.ringmap[key]] = c_.mul(w_.mul(1000).softmax(2).unsqueeze(3)).sum(2)
+            weights[:,:,self.ringmap[key]] = w_.mul(w_.softmax(2)).sum(2)
             cache[:,:,self.ringmap[key-1]] = x
             weights[:,:,self.ringmap[key-1]] = w
             if update_ringmap:
