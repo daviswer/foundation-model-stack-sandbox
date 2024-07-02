@@ -516,17 +516,17 @@ class MultiHeadAttention(nn.Module):
 
         # b l h e d, b n h d, l c
         attn = self.indlinear(
-            queries.to(dtype=torch.float16), 
-            keys.to(dtype=torch.float16), 
+            queries.to(dtype=torch.float32), 
+            keys.to(dtype=torch.float32), 
             self.plan[-1],
             self.Mp,
             self.Mv,
             self.Mt
         )  # b l h e c
-        attn = attn.to(dtype=torch.float32).softmax(4)
+        attn = attn.softmax(4)
         attn = self.indlineart(
-            attn.to(dtype=torch.float16), 
-            values.to(dtype=torch.float16), 
+            attn, 
+            values.to(dtype=torch.float32), 
             self.plan[-1],
             self.Mp,
             self.Mv,
