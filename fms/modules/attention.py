@@ -588,6 +588,9 @@ class MultiHeadAttention(nn.Module):
         expansion = self.nheads // self.kvheads
         queries = queries.unflatten(2, (self.kvheads, expansion))  # b l h e d
 
+        queries = queries.to(dtype=torch.float16)
+        keys = keys.to(dtype=torch.float16)
+        values = values.to(dtype=torch.float16)
         # b l h e d, b l h d 64
         attn = queries.matmul(keys)  # b l h e 64
         # denom = torch.stack([
@@ -600,7 +603,7 @@ class MultiHeadAttention(nn.Module):
         # b l h e 64, b l h 64 d
         attn = attn.matmul(values)  # b l h e d
 
-        attn = attn.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
+        attn = attn.to(dtype=torch.bfloat16).reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
         out = self.dense(attn)
 
         # if use_cache=True, we return the hidden_state as well as the kv cache
