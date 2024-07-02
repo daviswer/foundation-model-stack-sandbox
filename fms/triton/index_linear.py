@@ -194,7 +194,6 @@ def invoke_telescoping_kernel(
     )
 
     block_size_l = config["block_size_m"] // gs
-
     telescoping_kernel[grid](
         A,
         B,
@@ -363,6 +362,8 @@ def telescoping_bwd_a_kernel(
         & (offs_ae[None, None, :, None] < num_groups)
     )
 
+    accumulator.to(tl.float16)
+
     tl.atomic_add(
         o_ptrs,
         tl.reshape(
@@ -388,8 +389,7 @@ def invoke_telescoping_bwd_a_kernel(
 
     assert gs * h <= config["block_size_m"]
 
-    output = torch.zeros((bs, sl, h, gs, cs), dtype=A.dtype, device=A.device)
-
+    output = torch.zeros((bs, sl, h, gs, cs), dtype=torch.float16, device=A.device)
     grid = lambda META: (
         triton.cdiv(bs, META["block_size_b"]),
         triton.cdiv(sl * h * gs, META["block_size_m"])
@@ -436,7 +436,7 @@ def invoke_telescoping_bwd_a_kernel(
         block_size_l=block_size_l,
         **config,
     )
-    return output
+    return output.to(torch.bfloat16)
 
 
 @triton.jit()
@@ -552,7 +552,8 @@ def telescoping_bwd_b_kernel(
         accumulator += tl.dot(a, b)
         a_ptrs += stride_ae
         b_ptrs += stride_be
-
+    
+    accumulator.to(tl.float16)
     # Write O block
     value_idx = tl.load(value_block_mapping_ptr + pid_m)
     o_ptrs = (
@@ -589,8 +590,7 @@ def invoke_telescoping_bwd_b_kernel(
     _, c = M.shape
     # print(b, l, h, e, d, n, c)
 
-    output = torch.zeros((b, n, h, d), dtype=A.dtype, device=A.device)
-
+    output = torch.zeros((b, n, h, d), dtype=torch.float16, device=A.device)
     grid = lambda META: (
         triton.cdiv(b, META["block_size_b"]),
         triton.cdiv(padded_indices_per_block.shape[0], META["block_size_m"]),
@@ -626,7 +626,7 @@ def invoke_telescoping_bwd_b_kernel(
         output.stride(3),
         **config,
     )
-    return output
+    return output.to(torch.bfloat16)
 
 
 def invert_mapping_gpu(
@@ -707,7 +707,7 @@ class IndLinear(torch.autograd.Function):
     def forward(A, B, M, Mp, Mv, Mt):
         config = {
             "block_size_b": 1,
-            "block_size_m": 32,
+            "block_size_m": 64,
             "block_size_n": 64,
             "block_size_k": 64,
         }
@@ -724,7 +724,7 @@ class IndLinear(torch.autograd.Function):
 
         config_a = {
             "block_size_b": 1,
-            "block_size_m": 32,
+            "block_size_m": 64,
             "block_size_n": 64,
             "block_size_k": 64,
         }
@@ -744,7 +744,7 @@ class IndLinearTransposed(torch.autograd.Function):
     def forward(A, B, M, Mp, Mv, Mt):
         config = {
             "block_size_b": 1,
-            "block_size_m": 32,
+            "block_size_m": 64,
             "block_size_n": 64,
             "block_size_k": 64,
         }
@@ -761,7 +761,7 @@ class IndLinearTransposed(torch.autograd.Function):
 
         config_a = {
             "block_size_b": 1,
-            "block_size_m": 32,
+            "block_size_m": 64,
             "block_size_n": 64,
             "block_size_k": 64,
         }
