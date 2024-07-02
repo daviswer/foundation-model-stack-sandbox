@@ -516,8 +516,8 @@ class MultiHeadAttention(nn.Module):
 
         # b l h e d, b n h d, l c
         attn = self.indlinear(
-            queries.to(dtype=torch.float32), 
-            keys.to(dtype=torch.float32), 
+            queries, 
+            keys, 
             self.plan[-1],
             self.Mp,
             self.Mv,
@@ -526,14 +526,14 @@ class MultiHeadAttention(nn.Module):
         attn = attn.softmax(4)
         attn = self.indlineart(
             attn, 
-            values.to(dtype=torch.float32), 
+            values, 
             self.plan[-1],
             self.Mp,
             self.Mv,
             self.Mt,
         )  # b l h e d
 
-        attn = attn.to(dtype=torch.bfloat16).reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
+        attn = attn.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
         out = self.dense(attn)
 
         # if use_cache=True, we return the hidden_state as well as the kv cache
