@@ -110,6 +110,7 @@ class LLaMABlock(nn.Module):
     def forward(
         self,
         x,
+        model_loss,
         *,
         mask=None,
         position_ids=None,
@@ -128,7 +129,7 @@ class LLaMABlock(nn.Module):
         # first we do MHA and Add&Norm
         residual = x
         x = self.ln(x)
-        x = self.attn(
+        x,y = self.attn(
             q=x,
             mask=mask,
             position_ids=position_ids,
@@ -138,6 +139,7 @@ class LLaMABlock(nn.Module):
             is_self=True,
             is_causal_mask=is_causal_mask,
         )
+        model_loss = model_loss + y
         cache = None
         if use_cache:
             x, cache = x
@@ -158,7 +160,7 @@ class LLaMABlock(nn.Module):
         if use_cache:
             return (x, cache)
         else:
-            return x
+            return x, model_loss
 
 
 class LLaMA(nn.Module):
@@ -320,9 +322,11 @@ class LLaMA(nn.Module):
         # this is the output cache for all the decoder layers
         present_key_value_states = []
 
+        model_loss = 0
         for i, layer in enumerate(self.layers):
-            output = layer(
+            output, model_loss = layer(
                 x=x_in,
+                model_loss=model_loss,
                 mask=mask,
                 position_ids=position_ids,
                 past_key_value_state=past_key_value_states[i],
@@ -343,7 +347,7 @@ class LLaMA(nn.Module):
         if self.config.p_dropout:
             dec_out = self.dropout(dec_out)
 
-        return dec_out, present_key_value_states
+        return dec_out, present_key_value_states, model_loss
 
     def forward(
         self,
@@ -355,7 +359,7 @@ class LLaMA(nn.Module):
         only_last_token=False,
         attn_algorithm=None,
     ):
-        output, cache = self._helper(
+        output, cache, model_loss = self._helper(
             x, mask, position_ids, past_key_value_states, use_cache, attn_algorithm
         )
 
@@ -366,7 +370,7 @@ class LLaMA(nn.Module):
         if use_cache:
             return preds, cache
         else:
-            return preds
+            return preds, model_loss
 
 
 # Register common LLaMA variants with the model registration API

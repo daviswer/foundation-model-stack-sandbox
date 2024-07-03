@@ -17,62 +17,6 @@ from fms.modules.positions import PositionEncoder
 from fms.modules.tp import TPModule
 
 
-def scan(state, g):
-    # state: b n d h
-    # g: 1/b n h h
-    state = state.clone()
-    g = g.clone()
-    s = state.size()
-    g0 = g.size(0)
-    logl = s[1].bit_length() - 1
-    # Up sweep: create ruler ticks
-    for i in range(logl):
-        span = 2**(i+1)
-        state = state.view(s[0], -1, span, *s[2:])  # b -1 span d h
-        g = g.view(g0, -1, span, s[3], s[3])  # 1 -1 span h h
-        newstate = state[:,:,span//2-1].matmul(g[:,:,-1])
-        newgate = g[:,:,span//2-1].matmul(g[:,:,-1])
-        state[:,:,-1] += newstate
-        g[:,:,-1] = newgate
-        
-    # Down sweep: fill in blanks
-    state = state.view(*s)
-    g = g.view(g0, s[1], s[3], s[3])
-    state = nn.functional.pad(state, (0,0,0,0,1,0))
-    g = nn.functional.pad(g, (0,0,0,0,1,0))[:,:-1]
-    remainder = state[:,-1:]
-    state = state[:,:-1]
-    for i in range(logl-1):
-        span = 2**(logl-i-1)
-        state = state.view(s[0], -1, span, *s[2:])  # b -1 span d h
-        g = g.view(g0, -1, span, s[3], s[3])  # b -1 span h h
-        state[:,:,span//2] = state[:,:,span//2] + state[:,:,0].matmul(g[:,:,span//2])
-        g[:,:,span//2] = g[:,:,0].matmul(g[:,:,span//2])
-    state = torch.cat([state.view(*s)[:,1:], remainder], dim=1)
-    return state
-
-
-class MatScan(torch.autograd.Function):
-    @staticmethod
-    def forward(state, gate):
-        return scan(state, gate)
-
-    @staticmethod
-    def setup_context(ctx, inputs, output):
-        state, gate = inputs
-        ctx.save_for_backward(gate)
-
-    @staticmethod
-    def backward(ctx, grad):
-        gate = ctx.saved_tensors[0]
-
-        # Gate-accumulate grads
-        gflip = gate.flip([1]).transpose(2,3)
-        gatesum = scan(grad.flip([1]), gflip.roll(1, dims=1)).flip([1])  # b n d h
-
-        return gatesum, None
-
-
 def get_scan_plan(x, fmap, h):
     # x: b n d
     # plan: for each level, which entries to avg from previous level ([l] n' 2)
@@ -377,29 +321,22 @@ class MultiHeadAttention(nn.Module):
         #     7:29
         # }
         fmap = {
-            1:26,
-            2:50,
-            3:71,
-            4:89,
-            5:104,
-            6:116,
-            7:124
+            1:16,
+            2:32,
+            3:48,
+            4:64,
+            5:80,
+            6:96,
+            7:112,
         }
         self.fmap = fmap
         self.cache_size = 128
 
-        self.scan_impl = False
-        if self.scan_impl:
-            self.register_buffer("gates", self.make_gates())
-            self.matscan = MatScan.apply
-
-        self.weighted = True
-        if self.weighted:
-            self.w = nn.Sequential(
-                nn.Linear(self.emb_dim, self.emb_kq_per_head, bias=False),
-                nn.SiLU(),
-                nn.Linear(self.emb_kq_per_head, self.kvheads, bias=False),
-            )
+        self.w = nn.Sequential(
+            nn.Linear(self.emb_dim, self.emb_kq_per_head, bias=False),
+            nn.SiLU(),
+            nn.Linear(self.emb_kq_per_head, self.kvheads, bias=False),
+        )
 
     def reset_parameters(self):
         for m in self.modules():
@@ -413,23 +350,6 @@ class MultiHeadAttention(nn.Module):
     def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
         return TPMultiHeadAttention.import_module(self, group)
     
-    def make_gates(self):
-        n = 1024  # Roughly, total cache window length (actually somewhat smaller)
-        d = self.cache_size
-        interval = sum([torch.arange(n).remainder(2**x).sub(2**x-1).sign().add(1) 
-                        for x in range(n.bit_length())])
-        m = torch.zeros(n,d,d)
-        for i in range(n):
-            key = self.fmap.get(interval[i].item(), d)
-            for j in range(key+1, d):
-                m[i,j,j] = 1
-            if key < d:
-                m[i,key,key] = .5**.5
-                m[i,key,key-1] = .5**.5
-            for j in range(1,min(key,d)):
-                m[i,j,j-1] = 1
-        return m.transpose(1,2)  # 1k d d
-
     def scan(self, x, plan, ln, i, w=None):
         """
         Takes input x of shape [b n ...] and scan plan, computes recursive sums, and
@@ -535,58 +455,25 @@ class MultiHeadAttention(nn.Module):
             q_out, k_out, v_out = self.in_proj(q, k, v)
 
             # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
-            queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
-            keys = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
-            values = v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
+            q_out = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
+            k_out = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
+            v_out = v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
             # sink = queries.sum(3)  # b l he
 
             # You want to apply rotary embeddings pre-cache
             if self.position_encoder is not None:
-                queries, keys = self.position_encoder.adjusted_qk(
-                    queries, keys, position_ids, past_key_value_state, use_cache
+                q_out, k_out = self.position_encoder.adjusted_qk(
+                    q_out, k_out, position_ids, past_key_value_state, use_cache
                 )
 
-        queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
+        queries = q_out / (self.emb_kq_per_head**0.5)  # b l h d
         # sink = sink / (self.emb_kq_per_head**0.5)
 
         # Build telescoping cache
         # k/v: b l h d
-        w = None
-        if self.weighted:
-            w = self.w(k).unsqueeze(-1)  # b l h 1
-        if not self.scan_impl:
-            # keys = keys.view(batch_size, kv_len, -1)
-            keys = self.scan(keys, self.plan, None, 4, w)  # b l h d 64
-            values = self.scan(values, self.plan, None, 3, w)  # b l h 64 d
-        else:
-            gate = self.gates.repeat(4,1,1)[None]  # 1 l 64 64
-            keys = keys.view(batch_size, kv_len, -1, 1)
-            keys = F.pad(keys, (0, self.cache_size-1))  # b l hd 64
-            keys = self.matscan(keys, gate)
-            # keys = keys / keys.pow(2).mean(2, True).sqrt().add(1e-6)
-            keys = keys.unflatten(
-                2, (self.kvheads, self.emb_kq_per_head)
-            )  # b l h d 64
-            values = values.view(batch_size, kv_len, -1, 1)
-            values = F.pad(values, (0, self.cache_size-1))  # b l hd 64
-            values = self.matscan(values, gate).unflatten(
-                2, (self.kvheads, self.emb_v_per_head)
-            )  # b l h d 64
-            # values = values / values.pow(2).mean(3, True).sqrt().add(1e-6)
-            values = values.transpose(3,4)  # b l h 64 d
-
-        # if you want to use caching and past_key_value_state is not None meaning you have values in your cache
-        if (
-            use_cache
-            and past_key_value_state is not None
-            and past_key_value_state[0].numel() > 0
-        ):
-            if is_self:
-                keys = torch.cat((past_key_value_state[0], keys), dim=2)
-                values = torch.cat((past_key_value_state[1], values), dim=2)
-            else:
-                keys = past_key_value_state[0]
-                values = past_key_value_state[1]
+        w = self.w(k).unsqueeze(-1)  # b l h 1
+        keys = self.scan(k_out, self.plan, None, 4, w)  # b l h d 64
+        values = self.scan(v_out, self.plan, None, 3, w)  # b l h 64 d
 
         # Expand kv so black-box attn will work
         expansion = self.nheads // self.kvheads
@@ -594,12 +481,6 @@ class MultiHeadAttention(nn.Module):
 
         # b l h e d, b l h d 64
         attn = queries.matmul(keys)  # b l h e 64
-        # denom = torch.stack([
-        #         sink.view(batch_size, q_len, self.kvheads, expansion),
-        #         attn.logsumexp(4),
-        #     ], 4)  # b l h e 2
-        # denom = denom.logsumexp(4, True)  # b l h e 1
-        # attn = attn.sub(denom).exp()
         attn = attn.softmax(4)
         # b l h e 64, b l h 64 d
         attn = attn.matmul(values)  # b l h e d
@@ -607,11 +488,26 @@ class MultiHeadAttention(nn.Module):
         attn = attn.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
         out = self.dense(attn)
 
+        # Reference attention
+        with torch.no_grad():
+            queries = q_out.transpose(2,1)
+            keys = k_out.transpose(2,1)
+            values = v_out.transpose(2,1)
+            keys_e = keys.unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
+            values_e = values.unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
+            torch.backends.cuda.enable_flash_sdp(True)
+            attn2 = F.scaled_dot_product_attention(
+                queries,
+                keys_e,
+                values_e,
+                is_causal = True,
+            )
+
         # if use_cache=True, we return the hidden_state as well as the kv cache
         if use_cache:
             return out, (keys, values)
         else:
-            return out
+            return out, attn.sub(attn2).pow(2).sum(-1).sum(-1).mean()
 
 
 class TPMultiHeadAttention(MultiHeadAttention, TPModule):
