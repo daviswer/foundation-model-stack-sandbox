@@ -332,7 +332,7 @@ class MultiHeadAttention(nn.Module):
         self.fmap = fmap
         self.cache_size = 128
 
-        self.w = nn.Sequential(
+        self.merge_mlp = nn.Sequential(
             nn.Linear(self.emb_dim, self.emb_kq_per_head, bias=False),
             nn.SiLU(),
             nn.Linear(self.emb_kq_per_head, self.kvheads, bias=False),
@@ -471,7 +471,7 @@ class MultiHeadAttention(nn.Module):
 
         # Build telescoping cache
         # k/v: b l h d
-        w = self.w(k).unsqueeze(-1)  # b l h 1
+        w = self.merge_mlp(k).unsqueeze(-1)  # b l h 1
         keys = self.scan(k_out, self.plan, None, 4, w)  # b l h d 64
         values = self.scan(v_out, self.plan, None, 3, w)  # b l h 64 d
 
