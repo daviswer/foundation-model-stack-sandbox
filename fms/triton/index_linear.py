@@ -341,7 +341,7 @@ def telescoping_bwd_a_kernel(
         (block_size_b * block_size_l, block_size_k, block_size_n),
     )
     # We accumulate along the K dimension.
-    accumulator = tl.dot(a, b)
+    accumulator = tl.dot(a.to(tl.float16), b.to(tl.float16))
 
     # -----------------------------------------------------------
     # Write back the block of the output
@@ -549,7 +549,7 @@ def telescoping_bwd_b_kernel(
         # tl.device_print("a", a)
         # tl.device_print("b", b)
         # o_block = tl.sum(a * b[:, :, :, None], 2)  # b' z_h d'
-        accumulator += tl.dot(a, b)
+        accumulator += tl.dot(a.to(tl.float16), b.to(tl.float16))
         a_ptrs += stride_ae
         b_ptrs += stride_be
     
