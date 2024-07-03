@@ -110,7 +110,6 @@ class LLaMABlock(nn.Module):
     def forward(
         self,
         x,
-        model_loss,
         *,
         mask=None,
         position_ids=None,
@@ -139,7 +138,6 @@ class LLaMABlock(nn.Module):
             is_self=True,
             is_causal_mask=is_causal_mask,
         )
-        model_loss = model_loss + y
         cache = None
         if use_cache:
             x, cache = x
@@ -160,7 +158,7 @@ class LLaMABlock(nn.Module):
         if use_cache:
             return (x, cache)
         else:
-            return x, model_loss
+            return x, y
 
 
 class LLaMA(nn.Module):
@@ -324,9 +322,8 @@ class LLaMA(nn.Module):
 
         model_loss = 0
         for i, layer in enumerate(self.layers):
-            output, model_loss = layer(
+            output, aux = layer(
                 x=x_in,
-                model_loss=model_loss,
                 mask=mask,
                 position_ids=position_ids,
                 past_key_value_state=past_key_value_states[i],
@@ -341,6 +338,7 @@ class LLaMA(nn.Module):
 
             else:
                 x_in = output
+                model_loss = model_loss + aux
 
         dec_out = x_in
         dec_out = self.dec_norm(dec_out)
