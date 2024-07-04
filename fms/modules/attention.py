@@ -471,16 +471,16 @@ class MultiHeadAttention(nn.Module):
 
         # Build telescoping cache
         # k/v: b l h d
-        w = self.merge_mlp(k).unsqueeze(-1)  # b l h 1
-        keys = self.scan(k_out, self.plan, None, 4, w)  # b l h d 64
-        values = self.scan(v_out, self.plan, None, 3, w)  # b l h 64 d
+        w = self.merge_mlp(k.detach()).unsqueeze(-1)  # b l h 1
+        keys = self.scan(k_out.detach(), self.plan, None, 4, w)  # b l h d 64
+        values = self.scan(v_out.detach(), self.plan, None, 3, w)  # b l h 64 d
 
         # Expand kv so black-box attn will work
         expansion = self.nheads // self.kvheads
         queries = queries.unflatten(2, (self.kvheads, expansion))  # b l h e d
 
         # b l h e d, b l h d 64
-        attn = queries.matmul(keys)  # b l h e 64
+        attn = queries.detach().matmul(keys)  # b l h e 64
         attn = attn.softmax(4)
         # b l h e 64, b l h 64 d
         attn = attn.matmul(values)  # b l h e d
@@ -502,12 +502,13 @@ class MultiHeadAttention(nn.Module):
                 values_e,
                 is_causal = True,
             )
+            out2 = self.dense(attn2)
 
         # if use_cache=True, we return the hidden_state as well as the kv cache
         if use_cache:
             return out, (keys, values)
         else:
-            return out, attn.sub(attn2).pow(2).sum(-1).sum(-1).mean()
+            return out2, out.sub(out2).pow(2).sum(-1).sum(-1).mean()
 
 
 class TPMultiHeadAttention(MultiHeadAttention, TPModule):
