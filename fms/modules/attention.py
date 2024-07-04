@@ -596,6 +596,8 @@ class MultiHeadAttention(nn.Module):
         #     ], 4)  # b l h e 2
         # denom = denom.logsumexp(4, True)  # b l h e 1
         # attn = attn.sub(denom).exp()
+
+        attn = torch.where(attn!=0, attn, float('-inf'))
         attn = attn.softmax(4)
         # b l h e 64, b l h 64 d
         attn = attn.matmul(values)  # b l h e d
