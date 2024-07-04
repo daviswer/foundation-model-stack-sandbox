@@ -502,7 +502,7 @@ class MultiHeadAttention(nn.Module):
                 values_e,
                 is_causal = True,
             )
-            attn2 = attn2.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
+            attn2 = attn2.transpose(1,2).reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
             out2 = self.dense(attn2)
 
         # if use_cache=True, we return the hidden_state as well as the kv cache
