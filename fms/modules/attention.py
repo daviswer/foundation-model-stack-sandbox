@@ -485,8 +485,8 @@ class MultiHeadAttention(nn.Module):
         # b l h e 64, b l h 64 d
         attn = attn.matmul(values)  # b l h e d
 
-        attn = attn.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
-        out = self.dense(attn)
+        attn = attn.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)  # b l d'
+        out = attn.matmul(self.dense.weight.detach().t())
 
         # Reference attention
         with torch.no_grad():
@@ -509,7 +509,7 @@ class MultiHeadAttention(nn.Module):
         if use_cache:
             return out, (keys, values)
         else:
-            return out2, out.sub(out2).pow(2).sum(-1).sum(-1).mean()
+            return out2, out.sub(out2).pow(2).mean()
 
 
 class TPMultiHeadAttention(MultiHeadAttention, TPModule):
