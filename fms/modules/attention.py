@@ -541,14 +541,17 @@ class MultiHeadAttention(nn.Module):
                 )
 
         queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
+
+        # Expand kv so black-box attn will work
+        expansion = self.nheads // self.kvheads
+        queries = queries.unflatten(2, (self.kvheads, expansion))  # b l h e d
         # sink = sink / (self.emb_kq_per_head**0.5)
 
         # Build telescoping cache
         # k/v: b l h d
         w = None
         if self.weighted:
-            w = queries.unflatten(2, (self.kvheads, expansion))  # b l h e d
-            w = w.matmul(keys.unsqueeze(-1)).squeeze(-1).logsumexp(-1, True)  # b l h 1
+            w = queries.matmul(keys.unsqueeze(-1)).squeeze(-1).logsumexp(-1, True)  # b l h 1
         if not self.scan_impl:
             # keys = keys.view(batch_size, kv_len, -1)
             keys = self.scan(keys, self.plan, None, 4, w)  # b l h d 64
@@ -582,10 +585,6 @@ class MultiHeadAttention(nn.Module):
             else:
                 keys = past_key_value_state[0]
                 values = past_key_value_state[1]
-
-        # Expand kv so black-box attn will work
-        expansion = self.nheads // self.kvheads
-        queries = queries.unflatten(2, (self.kvheads, expansion))  # b l h e d
 
         # b l h e d, b l h d 64
         attn = queries.matmul(keys)  # b l h e 64
