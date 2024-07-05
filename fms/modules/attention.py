@@ -394,6 +394,8 @@ class MultiHeadAttention(nn.Module):
             self.matscan = MatScan.apply
 
         self.weighted = True
+        if self.weighted:
+            self.w = nn.Parameter(torch.zeros(self.emb_kq_per_head))
 
     def reset_parameters(self):
         for m in self.modules():
@@ -551,7 +553,8 @@ class MultiHeadAttention(nn.Module):
         # k/v: b l h d
         w = None
         if self.weighted:
-            w = queries.matmul(keys.unsqueeze(-1)).squeeze(-1).logsumexp(-1, True)  # b l h 1
+            w = queries.detach().mul(keys.unsqueeze(3).detach()).mul(self.w).sum(-1).logsumexp(-1, True)
+            # w = queries.matmul(keys.unsqueeze(-1)).squeeze(-1).logsumexp(-1, True)  # b l h 1
         if not self.scan_impl:
             # keys = keys.view(batch_size, kv_len, -1)
             keys = self.scan(keys, self.plan, None, 4, w)  # b l h d 64
