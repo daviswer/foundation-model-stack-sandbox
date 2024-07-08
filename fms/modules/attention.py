@@ -478,7 +478,8 @@ class MultiHeadAttention(nn.Module):
 
         # Advance caches
         if q_len == 1:
-            w = queries.view(batch_size, q_len, self.kvheads, -1, self.emb_kq_per_head)  # b l h e d
+            w = queries.view(batch_size, 1, self.kvheads, -1, self.emb_kq_per_head)  # b 1 h e d
+            print(w.shape, keys.unsqueeze(-2).shape)
             w = w.mul(keys.unsqueeze(-2)).sum(-1).logsumexp(-1).squeeze(1)  # b h
             past_key_value_state[0], past_key_value_state[2] = self.advance(
                 past_key_value_state[0][:,0], 
