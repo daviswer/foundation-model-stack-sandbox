@@ -338,8 +338,6 @@ class MultiHeadAttention(nn.Module):
         self.cache_size = 128 # 64
         
         self.register_buffer("ringmap", torch.arange(self.cache_size).int())
-        
-        self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
 
         self.step = 0
 
@@ -477,10 +475,11 @@ class MultiHeadAttention(nn.Module):
             )
         
         queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
-        w = self.w(q)  # b l h
 
         # Advance caches
         if q_len == 1:
+            w = queries.view(batch_size, q_len, self.kvheads, -1, self.emb_kq_per_head)  # b l h e d
+            w = w.mul(keys.unsqueeze(-2)).sum(-1).logsumexp(-1).squeeze(1)  # b h
             past_key_value_state[0], past_key_value_state[2] = self.advance(
                 past_key_value_state[0][:,0], 
                 past_key_value_state[2][:,0], 
@@ -506,6 +505,8 @@ class MultiHeadAttention(nn.Module):
                 self.inp_len = 2**(q_len-1).bit_length()
                 self.plan, self.imap = get_scan_plan(q.device, self.inp_len, self.fmap, self.cache_size)
             plan, imap = shrink_plan(self.plan, self.imap, q_len)
+            # Get weights
+            w = queries.matmul(keys.unsqueeze(-1)).squeeze(-1).logsumexp(-1)  # b l h
             # Scan
             past_key_value_state[0], past_key_value_state[2] = self.scan(keys, plan, imap, 3, w)
             past_key_value_state[1], past_key_value_state[3] = self.scan(values, plan, imap, 3, w)
