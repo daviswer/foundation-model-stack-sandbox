@@ -326,8 +326,8 @@ class MultiHeadAttention(nn.Module):
         q_proj = queries_unflat.matmul(w)
         k_proj = keys.unsqueeze(-2).matmul(w)  # b l h 1 d
         v_pos = torch.where(values > 0, values.log(), float('-inf'))
-        # v_neg = torch.where(values < 0, values.neg().log(), float('-inf'))
-        # v_sep = torch.cat([v_pos, v_neg], dim=-1)  # b l h d+d
+        v_neg = torch.where(values < 0, values.neg().log(), float('-inf'))
+        v_sep = torch.cat([v_pos, v_neg], dim=-1)  # b l h d+d
         v_sep = v_pos
 
         # Calculate denominators
