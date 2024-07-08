@@ -346,8 +346,8 @@ class MultiHeadAttention(nn.Module):
         qkv_pos = q_proj.unsqueeze(-1).add(kv_pos).logsumexp(4)  # b l h e d+d
         # qkv_neg = q_proj.neg().exp().unsqueeze(-1).mul(kv_neg).sum(4)  # b l h e d+d
         # qkv = qkv_pos.add(qkv_neg).view(batch_size, q_len, self.nheads, 2, self.emb_v_per_head)  # b l he 2 d
-        qkv = qkv.exp()
-        qkv = qkv_pos.view(batch_size, q_len, self.nheads, 2, self.emb_v_per_head)  # b l he 2 d
+        qkv = qkv_pos.exp()
+        qkv = qkv.view(batch_size, q_len, self.nheads, 2, self.emb_v_per_head)  # b l he 2 d
         qkv = qkv[:,:,:,0] - qkv[:,:,:,1]  # b l he d
         
         attn = qkv.view(batch_size, q_len, -1)
