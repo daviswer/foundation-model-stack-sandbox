@@ -239,7 +239,7 @@ class MultiHeadAttention(nn.Module):
         self.dense = nn.Linear(
             self.nheads * self.emb_v_per_head, self.emb_dim, bias=use_bias
         )
-        self.w = nn.Linear(self.kvheads*self.emb_kq_per_head, self.emb_kq_per_head, use_bias=False)
+        self.w = nn.Linear(self.kvheads*self.emb_kq_per_head, self.emb_kq_per_head, bias=False)
 
         if self.p_dropout:
             self.attn_dropout = nn.Dropout(self.p_dropout)
