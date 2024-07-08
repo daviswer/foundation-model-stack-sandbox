@@ -333,8 +333,8 @@ class MultiHeadAttention(nn.Module):
         qk_neg_denom = k_proj.neg().logcumsumexp(1).sub(q_proj).logsumexp(-1)  # b l h e
         qk_denom = torch.logsumexp(torch.stack([qk_pos_denom, qk_neg_denom], dim=-1), dim=-1)  # b l h e
         # Calculate numerators
-        k_pos_v = k_proj.unsqueeze(-1).add(v_sep.unsqueeze(-2)).logcumsumexp(1)  # b l h d d+d
-        k_neg_v = v_sep.unsqueeze(-2).sub(k_proj.unsqueeze(-1)).logcumsumexp(1)  # b l h d d+d
+        k_pos_v = k_proj.transpose(3,4).add(v_sep.unsqueeze(-2)).logcumsumexp(1)  # b l h d d+d
+        k_neg_v = v_sep.unsqueeze(-2).sub(k_proj.transpose(3,4)).logcumsumexp(1)  # b l h d d+d
         # Perform querying
         kv_pos = k_pos_v.unsqueeze(3).sub(qk_denom.unsqueeze(-1).unsqueeze(-1)).exp()  # b l h e d d+d
         kv_neg = k_neg_v.unsqueeze(3).sub(qk_denom.unsqueeze(-1).unsqueeze(-1)).exp()  # b l h e d d+d
