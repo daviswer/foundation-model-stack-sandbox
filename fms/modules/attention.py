@@ -328,7 +328,6 @@ class MultiHeadAttention(nn.Module):
         v_pos = torch.where(values > 0, values.log(), float('-inf'))
         v_neg = torch.where(values < 0, values.neg().log(), float('-inf'))
         v_sep = torch.cat([v_pos, v_neg], dim=-1)  # b l h d+d
-        v_sep = v_pos
 
         # Calculate denominators
         qk_pos_denom = k_proj.logcumsumexp(1).add(q_proj).logsumexp(-1)  # b l h e
