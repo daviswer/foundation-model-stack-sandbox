@@ -326,23 +326,29 @@ class MultiHeadAttention(nn.Module):
         q_proj = queries_unflat.matmul(w)
         k_proj = keys.unsqueeze(-2).matmul(w)  # b l h 1 d
         v_pos = torch.where(values > 0, values.log(), float('-inf'))
-        v_neg = torch.where(values < 0, values.neg().log(), float('-inf'))
-        v_sep = torch.cat([v_pos, v_neg], dim=-1)  # b l h d+d
+        # v_neg = torch.where(values < 0, values.neg().log(), float('-inf'))
+        # v_sep = torch.cat([v_pos, v_neg], dim=-1)  # b l h d+d
+        v_sep = v_pos
+
         # Calculate denominators
         qk_pos_denom = k_proj.logcumsumexp(1).add(q_proj).logsumexp(-1)  # b l h e
-        qk_neg_denom = k_proj.neg().logcumsumexp(1).sub(q_proj).logsumexp(-1)  # b l h e
-        qk_denom = torch.logsumexp(torch.stack([qk_pos_denom, qk_neg_denom], dim=-1), dim=-1)  # b l h e
+        # qk_neg_denom = k_proj.neg().logcumsumexp(1).sub(q_proj).logsumexp(-1)  # b l h e
+        # qk_denom = torch.logsumexp(torch.stack([qk_pos_denom, qk_neg_denom], dim=-1), dim=-1)  # b l h e
+        qk_denom = qk_pos_denom
+        
         # Calculate numerators
         k_pos_v = k_proj.transpose(3,4).add(v_sep.unsqueeze(-2)).logcumsumexp(1)  # b l h d d+d
-        k_neg_v = v_sep.unsqueeze(-2).sub(k_proj.transpose(3,4)).logcumsumexp(1)  # b l h d d+d
+        # k_neg_v = v_sep.unsqueeze(-2).sub(k_proj.transpose(3,4)).logcumsumexp(1)  # b l h d d+d
+        
         # Perform querying
         kv_pos = k_pos_v.unsqueeze(3).sub(qk_denom.unsqueeze(-1).unsqueeze(-1)).exp()  # b l h e d d+d
-        kv_neg = k_neg_v.unsqueeze(3).sub(qk_denom.unsqueeze(-1).unsqueeze(-1)).exp()  # b l h e d d+d
+        # kv_neg = k_neg_v.unsqueeze(3).sub(qk_denom.unsqueeze(-1).unsqueeze(-1)).exp()  # b l h e d d+d
         qkv_pos = q_proj.exp().unsqueeze(-1).mul(kv_pos).sum(4)  # b l h e d+d
-        qkv_neg = q_proj.neg().exp().unsqueeze(-1).mul(kv_neg).sum(4)  # b l h e d+d
-        qkv = qkv_pos.add(qkv_neg).view(batch_size, q_len, self.nheads, 2, self.emb_v_per_head)  # b l he 2 d
+        # qkv_neg = q_proj.neg().exp().unsqueeze(-1).mul(kv_neg).sum(4)  # b l h e d+d
+        # qkv = qkv_pos.add(qkv_neg).view(batch_size, q_len, self.nheads, 2, self.emb_v_per_head)  # b l he 2 d
+        qkv = qkv_pos.view(batch_size, q_len, self.nheads, 2, self.emb_v_per_head)  # b l he 2 d
         qkv = qkv[:,:,:,0] - qkv[:,:,:,1]  # b l he d
-
+        
         attn = qkv.view(batch_size, q_len, -1)
 
         out = self.dense(attn)
