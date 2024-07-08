@@ -376,16 +376,15 @@ class MultiHeadAttention(nn.Module):
         #     6:27,
         #     7:29
         # }
-        # fmap = {
-        #     1:26,
-        #     2:50,
-        #     3:71,
-        #     4:89,
-        #     5:104,
-        #     6:116,
-        #     7:124
-        # }
-        fmap = {x:16*x for x in range(1,8)}
+        fmap = {
+            1:26,
+            2:50,
+            3:71,
+            4:89,
+            5:104,
+            6:116,
+            7:124
+        }
         self.fmap = fmap
         self.cache_size = 128
 
