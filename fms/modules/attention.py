@@ -239,6 +239,8 @@ class MultiHeadAttention(nn.Module):
         self.dense = nn.Linear(
             self.nheads * self.emb_v_per_head, self.emb_dim, bias=use_bias
         )
+        self.w = nn.Linear(self.kvheads*self.emb_kq_per_head, self.emb_kq_per_head, use_bias=False)
+
         if self.p_dropout:
             self.attn_dropout = nn.Dropout(self.p_dropout)
         self.position_encoder = position_encoder
@@ -318,82 +320,31 @@ class MultiHeadAttention(nn.Module):
                     queries, keys, position_ids, past_key_value_state, use_cache
                 )
 
-        queries = queries.transpose(2, 1)  # / (self.emb_kq_per_head**(1/4))
-        keys = keys.transpose(2, 1)  # / (self.emb_kq_per_head**(1/4))
-        values = values.transpose(2, 1)  # compatible with QK.T
+        # q/k/v: b l h d
+        w = self.w.weight.view(self.kvheads, self.emb_kq_per_head, self.emb_kq_per_head)  # h d d
+        queries_unflat = queries.view(batch_size, q_len, self.kvheads, -1, self.emb_kq_per_head)  # b l h e d
+        q_proj = queries_unflat.matmul(w)
+        k_proj = keys.unsqueeze(-2).matmul(w)  # b l h 1 d
+        v_pos = torch.where(values > 0, values.log(), float('-inf'))
+        v_neg = torch.where(values < 0, values.neg().log(), float('-inf'))
+        v_sep = torch.cat([v_pos, v_neg], dim=-1)  # b l h d+d
+        # Calculate denominators
+        qk_pos_denom = k_proj.logcumsumexp(1).add(q_proj).logsumexp(-1)  # b l h e
+        qk_neg_denom = k_proj.neg().logcumsumexp(1).sub(q_proj).logsumexp(-1)  # b l h e
+        qk_denom = torch.logsumexp(torch.stack([qk_pos_denom, qk_neg_denom], dim=-1), dim=-1)  # b l h e
+        # Calculate numerators
+        k_pos_v = k_proj.unsqueeze(-1).add(v_sep.unsqueeze(-2)).logcumsumexp(1)  # b l h d d+d
+        k_neg_v = v_sep.unsqueeze(-2).sub(k_proj.unsqueeze(-1)).logcumsumexp(1)  # b l h d d+d
+        # Perform querying
+        kv_pos = k_pos_v.unsqueeze(3).sub(qk_denom.unsqueeze(-1).unsqueeze(-1)).exp()  # b l h e d d+d
+        kv_neg = k_neg_v.unsqueeze(3).sub(qk_denom.unsqueeze(-1).unsqueeze(-1)).exp()  # b l h e d d+d
+        qkv_pos = q_proj.exp().unsqueeze(-1).mul(kv_pos).sum(4)  # b l h e d+d
+        qkv_neg = q_proj.neg().exp().unsqueeze(-1).mul(kv_neg).sum(4)  # b l h e d+d
+        qkv = qkv_pos.add(qkv_neg).view(batch_size, q_len, self.nheads, 2, self.emb_v_per_head)  # b l he 2 d
+        qkv = qkv[:,:,:,0] - qkv[:,:,:,1]  # b l he d
 
-        # if you want to use caching and past_key_value_state is not None meaning you have values in your cache
-        if (
-            use_cache
-            and past_key_value_state is not None
-            and past_key_value_state[0].numel() > 0
-        ):
-            if is_self:
-                keys = torch.cat((past_key_value_state[0], keys), dim=2)
-                values = torch.cat((past_key_value_state[1], values), dim=2)
-            else:
-                keys = past_key_value_state[0]
-                values = past_key_value_state[1]
+        attn = qkv.view(batch_size, q_len, -1)
 
-        # Merge rel pos bias and mask into single float mask
-        if mask is not None:
-            # Our expected mask format is bs x q_len x k_len, so to make it broadcastable
-            # we need to create the nheads dimension
-            while len(mask.size()) != 4:  # expects bs (x nheads) x q_len x kv_len
-                mask = mask.unsqueeze(1)
-
-        if self.position_encoder is not None:
-            attn_mask: Optional[Tensor] = self.position_encoder.adjusted_mask(
-                mask, queries, keys, past_key_value_state, use_cache
-            )
-        else:
-            attn_mask = mask
-
-        # Expand kv so black-box attn will work
-        expansion = self.nheads // self.kvheads
-        # k/v: b h l d
-        if expansion != 1:
-            keys_e = keys.unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
-            values_e = (
-                values.unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
-            )
-        else:
-            keys_e = keys
-            values_e = values
-
-        if attn_algorithm:
-            # Pick which fused attn kernels will run.
-            use_flash = attn_algorithm == "flash"
-            use_mem_efficient = attn_algorithm == "mem"
-            use_math = attn_algorithm == "math"
-
-            torch.backends.cuda.enable_flash_sdp(use_flash)
-            torch.backends.cuda.enable_mem_efficient_sdp(use_mem_efficient)
-            torch.backends.cuda.enable_math_sdp(use_math)
-
-        attn = F.scaled_dot_product_attention(
-            queries,
-            keys_e,
-            values_e,
-            attn_mask=attn_mask,
-            dropout_p=self.p_dropout if self.training else 0.0,
-            is_causal=is_causal_mask,
-        )
-
-        if attn_algorithm:
-            torch.backends.cuda.enable_flash_sdp(self.previous_flash)
-            torch.backends.cuda.enable_mem_efficient_sdp(self.previous_mem_efficient)
-            torch.backends.cuda.enable_math_sdp(self.previous_math)
-
-        # attn: bs x seq_len x nheads*emb_v_per_head
-        # attn: b x h x qlen x ds
-        # attn after permute: b x qlen x h x ds
-        # b x qlen x (d)
-        attn = (
-            attn.transpose(2, 1)
-            .contiguous()
-            .view(batch_size, q_len, self.nheads * self.emb_v_per_head)
-        )
         out = self.dense(attn)
 
         # if use_cache=True, we return the hidden_state as well as the kv cache
