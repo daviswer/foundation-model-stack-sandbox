@@ -330,7 +330,7 @@ class MultiHeadAttention(nn.Module):
         kk_ = torch.cat([k_proj.exp(), k_proj.neg().exp()], dim=-1)  # b l h 1 d+d
         qq_ = torch.cat([q_proj.exp(), q_proj.neg().exp()], dim=-1)  # b l h e d+d
         qk = qq_.permute(0,2,3,1,4).matmul(kk_.permute(0,2,3,4,1))  # b h e l l
-        qk = qk.mul(torch.ones(q_len, q_len, device=q.device).tril())
+        qk = qk.mul(torch.ones(q_len, q_len, device=q.device, dtype=q.dtype).tril())
         qkv = qk.matmul(values.permute(0,2,1,3).unsqueeze(2))  # b h e l d
         qkv = qkv/qk.sum(-1, True)
         qkv = qkv.permute(0,3,1,2,4).contiguous()  # b l h e d
