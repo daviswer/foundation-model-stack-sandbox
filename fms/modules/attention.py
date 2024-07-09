@@ -326,13 +326,22 @@ class MultiHeadAttention(nn.Module):
         q_proj = queries_unflat.matmul(w)
         k_proj = keys.unsqueeze(-2).matmul(w)  # b l h 1 d
 
+        # LINEAR ATTN AS ATTN
         kk_ = torch.cat([k_proj.exp(), k_proj.neg().exp()], dim=-1)  # b l h 1 d+d
         qq_ = torch.cat([q_proj.exp(), q_proj.neg().exp()], dim=-1)  # b l h e d+d
-        kv = kk_.transpose(3,4).mul(values.unsqueeze(-2)).cumsum(1)  # b l h d+d d
-        denom = kk_.cumsum(1).mul(qq_).sum(-1)  # b l h e
-        qkv = qq_.unsqueeze(-1).mul(kv.unsqueeze(3)).sum(4).div(denom.unsqueeze(-1))  # b l h e d
+        qk = qq_.unsqueeze(2).mul(kk_.unsqueeze(1)).sum(-1, True)  # b l l h e 1
+        qk = qk.mul(torch.ones(q_len, q_len, device=q.device).tril()[:,:,None,None,None])
+        qkv = qk.mul(values.unsqueeze(1).unsqueeze(-2)).sum(2)  # b l h e d
+        qkv = qkv/qk.sum(2)
 
+        # CUMSUM IN LINSPACE, NOT LOGSPACE
+        # kk_ = torch.cat([k_proj.exp(), k_proj.neg().exp()], dim=-1)  # b l h 1 d+d
+        # qq_ = torch.cat([q_proj.exp(), q_proj.neg().exp()], dim=-1)  # b l h e d+d
+        # kv = kk_.transpose(3,4).mul(values.unsqueeze(-2)).cumsum(1)  # b l h d+d d
+        # denom = kk_.cumsum(1).mul(qq_).sum(-1)  # b l h e
+        # qkv = qq_.unsqueeze(-1).mul(kv.unsqueeze(3)).sum(4).div(denom.unsqueeze(-1))  # b l h e d
 
+        # LOGSPACE IMPL
         # v_pos = torch.where(values > 0, values.log(), float('-inf'))
         # v_neg = torch.where(values < 0, values.neg().log(), float('-inf'))
         # v_sep = torch.cat([v_pos, v_neg], dim=-1)  # b l h d+d
