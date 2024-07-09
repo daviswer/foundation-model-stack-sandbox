@@ -259,7 +259,6 @@ class MultiHeadAttention(nn.Module):
                     m.bias.data.zero_()
             elif isinstance(m, QKV):
                 m.reset_parameters()
-        self.w.weight.data.zero_()
 
     def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
         return TPMultiHeadAttention.import_module(self, group)
@@ -324,8 +323,8 @@ class MultiHeadAttention(nn.Module):
         # q/k/v: b l h d
         w = self.w.weight.view(self.kvheads, self.emb_kq_per_head, self.emb_kq_per_head)  # h d d
         queries_unflat = queries.view(batch_size, q_len, self.kvheads, -1, self.emb_kq_per_head)  # b l h e d
-        q_proj = queries_unflat.matmul(w).add(queries_unflat)
-        k_proj = keys.unsqueeze(-2).matmul(w).add(keys.unsqueeze(-2))  # b l h 1 d
+        q_proj = queries_unflat.matmul(w)
+        k_proj = keys.unsqueeze(-2).matmul(w)  # b l h 1 d
 
         # LINEAR ATTN AS ATTN
         kk_ = torch.cat([k_proj.exp(), k_proj.neg().exp()], dim=-1)  # b l h 1 d+d
