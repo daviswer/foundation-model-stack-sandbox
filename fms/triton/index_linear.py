@@ -341,7 +341,7 @@ def telescoping_bwd_a_kernel(
         (block_size_b * block_size_l, block_size_k, block_size_n),
     )
     # We accumulate along the K dimension.
-    accumulator = tl.dot(a.to(tl.float16), b.to(tl.float16))
+    accumulator = tl.dot(a, b)
 
     # -----------------------------------------------------------
     # Write back the block of the output
@@ -362,7 +362,7 @@ def telescoping_bwd_a_kernel(
         & (offs_ae[None, None, :, None] < num_groups)
     )
 
-    accumulator.to(tl.float16)
+    accumulator.to(tl.float32)
 
     tl.atomic_add(
         o_ptrs,
@@ -389,7 +389,7 @@ def invoke_telescoping_bwd_a_kernel(
 
     assert gs * h <= config["block_size_m"]
 
-    output = torch.zeros((bs, sl, h, gs, cs), dtype=torch.float16, device=A.device)
+    output = torch.zeros((bs, sl, h, gs, cs), dtype=torch.float32, device=A.device)
     grid = lambda META: (
         triton.cdiv(bs, META["block_size_b"]),
         triton.cdiv(sl * h * gs, META["block_size_m"])
@@ -549,11 +549,11 @@ def telescoping_bwd_b_kernel(
         # tl.device_print("a", a)
         # tl.device_print("b", b)
         # o_block = tl.sum(a * b[:, :, :, None], 2)  # b' z_h d'
-        accumulator += tl.dot(a.to(tl.float16), b.to(tl.float16))
+        accumulator += tl.dot(a, b)
         a_ptrs += stride_ae
         b_ptrs += stride_be
     
-    accumulator.to(tl.float16)
+    accumulator.to(tl.float32)
     # Write O block
     value_idx = tl.load(value_block_mapping_ptr + pid_m)
     o_ptrs = (
@@ -590,7 +590,7 @@ def invoke_telescoping_bwd_b_kernel(
     _, c = M.shape
     # print(b, l, h, e, d, n, c)
 
-    output = torch.zeros((b, n, h, d), dtype=torch.float16, device=A.device)
+    output = torch.zeros((b, n, h, d), dtype=torch.float32, device=A.device)
     grid = lambda META: (
         triton.cdiv(b, META["block_size_b"]),
         triton.cdiv(padded_indices_per_block.shape[0], META["block_size_m"]),
