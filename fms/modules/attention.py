@@ -475,7 +475,7 @@ class MultiHeadAttention(nn.Module):
         if rope is not None:
             cs = cache.size()
             cache = cache.view(cs[0], cs[1], -1, cs[-1])  # b n h d
-            cache = rope.adjusted_qk(cache, pos).view(*cs)
+            cache = rope.adjusted_qk(cache, pos[None]).view(*cs)
         cache = cache.unsqueeze(i).expand(
             *[-1] * i, inds.size(-1), *[-1] * (len(s) - i)
         )  # b n' ... h ...
