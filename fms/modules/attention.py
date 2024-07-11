@@ -73,61 +73,68 @@ class MatScan(torch.autograd.Function):
         return gatesum, None
 
 
-def get_scan_plan(x, fmap, h):
-    # x: b n d
-    # plan: for each level, which entries to avg from previous level ([l] n' 2)
-    # inds: which level and entry to pull from in populating heads (n h 2) -> (n h)
-    b, n, d = x.size()
+def get_scan_plan(x, fmap, c):
+    # x: b l d
+    # plan: for each level, which entries to avg from previous level ([j] n' 2)
+    # inds: which level and entry to pull from in populating heads (l c 2) -> (l c)
+    # pos: logical position of each cache entry ([j] n') -> (n)
+    b, l, d = x.size()
     # Form ruler-tick progression sequence
     levels = sum(
         [
-            torch.arange(n, device=x.device)
+            torch.arange(l, device=x.device)
             .remainder(2**i)
             .sub(2**i - 1)
             .sign()
             .add(1)
-            for i in range(n.bit_length())
+            for i in range(l.bit_length())
         ]
     ).roll(1, 0)
     plan = [
         torch.zeros(0, 2, device=x.device, dtype=torch.int)
         for _ in range(len(fmap) + 2)
-    ]  # [l] 0 2
+    ]  # [j] 0 2
     plan[1] = (
         torch.arange(x.size(1) + 1, device=x.device, dtype=torch.int)
         .unsqueeze(1)
         .expand(-1, 2)
     )
-    inds = torch.zeros(n, h, 2, device=x.device, dtype=torch.long)  # n h 2
-    inds[:, 0, 1] = torch.arange(n, device=inds.device, dtype=inds.dtype) + 1
+    pos = [
+        torch.zeros(0, device=x.device, dtype=torch.int)
+        for _ in range(len(fmap) + 2)
+    ]  # [j] 0
+    pos[1] = torch.arange(x.size(1) + 1, device=x.device, dtype=torch.int).sub(1).clamp(min=0)
+    inds = torch.zeros(l, c, 2, device=x.device, dtype=torch.long)  # n c 2
+    # First entry is always level 1, entry t+1
+    inds[:, 0, 1] = torch.arange(l, device=inds.device, dtype=inds.dtype) + 1
     inds[:, :, 0] = 1
-    for i in range(1, n):
-        m = fmap.get(levels[i].item(), h)
+    for i in range(1, l):
+        m = fmap.get(levels[i].item(), c)
         inds[i, 1:m] = inds[i - 1, : m - 1]
-        if m < h:
+        if m < c:
             inds[i, m + 1 :] = inds[i - 1, m + 1 :]
             prev = inds[i - 1, m - 1 : m + 1].flip([0])  # 2 2
-            assert prev[0, 0] == min(levels[i], len(fmap) + 1) or prev[0, 1] == 0, (
-                levels[i],
-                prev[0, 0],
-            )
-            assert prev[1, 0] == min(levels[i], len(fmap) + 1) or prev[1, 1] == 0, (
-                levels[i],
-                prev[1, 0],
-            )
             level = plan[levels[i] + 1]
             inds[i, m, 0] = levels[i] + 1
             inds[i, m, 1] = level.size(0)
             plan[levels[i] + 1] = torch.cat(
                 [plan[levels[i] + 1], prev[:, 1][None]], dim=0
             )
-    # Flatten inds (indexing into flattened plan/cache) (n h)
+            pos[levels[i] + 1] = torch.cat(
+                [pos[levels[i] + 1], pos[levels[i]][prev[:, 1]].max()[None]], dim=0
+            )
+
+    # Flatten inds (indexing into flattened plan/cache) (l c)
     ls = [p.size(0) for p in plan]
     ls = [0] + ls[:-1]
     offset = torch.tensor(ls, device=inds.device).cumsum(0)
     offset = offset[inds[:, :, 0]]
     inds = offset + inds[:, :, 1]
-    return plan + [inds]
+
+    # Flatten pos
+    pos = torch.cat(pos)
+    
+    return plan + [inds, pos]
 
 
 class QKV(nn.Module, metaclass=abc.ABCMeta):
@@ -376,16 +383,16 @@ class MultiHeadAttention(nn.Module):
         #     6:27,
         #     7:29
         # }
-        # fmap = {
-        #     1:26,
-        #     2:50,
-        #     3:71,
-        #     4:89,
-        #     5:104,
-        #     6:116,
-        #     7:124
-        # }
-        fmap = {x:16*x for x in range(1,8)}
+        fmap = {
+            1:26,
+            2:50,
+            3:71,
+            4:89,
+            5:104,
+            6:116,
+            7:124
+        }
+        # fmap = {x:16*x for x in range(1,8)}
         self.fmap = fmap
         self.cache_size = 128
 
@@ -425,7 +432,7 @@ class MultiHeadAttention(nn.Module):
                 m[i,j,j-1] = 1
         return m.transpose(1,2)  # 1k d d
 
-    def scan(self, x, plan, ln, i, w=None):
+    def scan(self, x, plan, rope, i, w=None):
         """
         Takes input x of shape [b n ...] and scan plan, computes recursive sums, and
         extracts cache values into the dimension specified by i > 1.
@@ -440,13 +447,14 @@ class MultiHeadAttention(nn.Module):
             weights = nn.functional.pad(w.view(s[0], s[1], -1), (0,0,1,0), value=-1000).view(
                 s[0], s[1] + 1, *ws[2:]
             )
-        inds = plan[-1]  # n h
-        plan = plan[:-1]
+        pos = plan[-1]  # n
+        inds = plan[-2]  # l c
+        plan = plan[:-2]
         # Plan and inds are formed, construct cache via recursive sums
         cache = [None for _ in plan]
         cache[1] = nn.functional.pad(x.view(s[0], s[1], -1), (0, 0, 1, 0)).view(
             s[0], s[1] + 1, *s[2:]
-        )  # b n ...
+        )  # b l ...
         for j in range(2, len(cache)):
             if weighted:
                 weights = weights.index_select(1, plan[j].view(-1)).view(s[0], -1, 2, *ws[2:])
@@ -462,7 +470,11 @@ class MultiHeadAttention(nn.Module):
             else:
                 cache[j] = cache[j].sum(2).div(2**0.5)
             
-        cache = torch.cat(cache[1:], dim=1)  # b n' ...
+        cache = torch.cat(cache[1:], dim=1)  # b n ...
+        cs = cache.size()
+        # Rope needs: cache: b n h d, pos: 1 n
+        #TODO
+        assert False
         # cache = ln(cache)
         cache = cache.unsqueeze(i).expand(
             *[-1] * i, inds.size(-1), *[-1] * (len(s) - i)
