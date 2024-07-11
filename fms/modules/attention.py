@@ -471,11 +471,11 @@ class MultiHeadAttention(nn.Module):
                 cache[j] = cache[j].sum(2).div(2**0.5)
             
         cache = torch.cat(cache[1:], dim=1)  # b n ...
-        cs = cache.size()
         # Rope needs: cache: b n h d, pos: 1 n
-        #TODO
-        assert False
-        # cache = ln(cache)
+        if rope is not None:
+            cs = cache.size()
+            cache = cache.view(cs[0], cs[1], -1, cs[-1])  # b n h d
+            cache = rope.adjusted_qk(cache, pos).view(*cs)
         cache = cache.unsqueeze(i).expand(
             *[-1] * i, inds.size(-1), *[-1] * (len(s) - i)
         )  # b n' ... h ...
@@ -549,8 +549,8 @@ class MultiHeadAttention(nn.Module):
 
             # You want to apply rotary embeddings pre-cache
             if self.position_encoder is not None:
-                queries, keys = self.position_encoder.adjusted_qk(
-                    queries, keys, position_ids, past_key_value_state, use_cache
+                queries = self.position_encoder.adjusted_qk(
+                    queries, position_ids, past_key_value_state, use_cache
                 )
 
         queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
@@ -567,7 +567,7 @@ class MultiHeadAttention(nn.Module):
             w = queries.matmul(keys.unsqueeze(-1)).squeeze(-1).logsumexp(-1, True)  # b l h 1
         if not self.scan_impl:
             # keys = keys.view(batch_size, kv_len, -1)
-            keys = self.scan(keys, self.plan, None, 4, w)  # b l h d 64
+            keys = self.scan(keys, self.plan, self.position_encoder, 4, w)  # b l h d 64
             values = self.scan(values, self.plan, None, 3, w)  # b l h 64 d
         else:
             gate = self.gates.repeat(4,1,1)[None]  # 1 l 64 64
