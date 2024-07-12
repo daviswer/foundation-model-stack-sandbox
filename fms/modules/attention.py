@@ -475,6 +475,8 @@ class MultiHeadAttention(nn.Module):
                 )
 
         queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
+        expansion = self.nheads // self.kvheads
+        queries = queries.unflatten(2, (self.kvheads, expansion))  # b l h e d
         # sink = sink / (self.emb_kq_per_head**0.5)
 
         # Build telescoping cache
@@ -509,10 +511,6 @@ class MultiHeadAttention(nn.Module):
             else:
                 keys = past_key_value_state[0]
                 values = past_key_value_state[1]
-
-        # Expand kv so black-box attn will work
-        expansion = self.nheads // self.kvheads
-        queries = queries.unflatten(2, (self.kvheads, expansion))  # b l h e d
 
         # b l h e d, b n h d, l c
         attn = self.indlinear(
