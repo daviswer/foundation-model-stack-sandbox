@@ -213,7 +213,6 @@ class RotaryEmbedding(PositionEncoder):
     def adjusted_qk(
         self,
         q: torch.Tensor,
-        k: torch.Tensor,
         position_ids: Optional[torch.Tensor] = None,
         past_kv_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         use_cache=False,
@@ -223,8 +222,6 @@ class RotaryEmbedding(PositionEncoder):
         ----
         q : torch.Tensor
             Embedded query tensor, expected size is B x S x H x Eh
-        k : torch.Tensor
-            Embedded query tensor, expected size is B x S x H x Eh
         position_ids : Optional[torch.LongTensor]
             The position of each of the tokens encoded in q and k. This is important in
             kv-caching and left-padding situations, for which the rotation to be applied might
@@ -232,19 +229,17 @@ class RotaryEmbedding(PositionEncoder):
             or variable per-row left padding position_ids is shared for all the batch.
         """
         assert len(q.size()) == 4
-        assert len(k.size()) == 4
 
-        seq_len = max(k.size(1), q.size(1))
+        seq_len = q.size(1)
         if position_ids is None:
             # Compute position_ids based on cache config
             position_ids = torch.arange(
                 0, seq_len, dtype=torch.long, device=q.device
-            ).repeat(k.size(0), 1)
+            ).repeat(q.size(0), 1)
             if use_cache and past_kv_state is not None and past_kv_state[0].numel() > 0:
                 position_ids += past_kv_state[0].size(2)
 
         q_ = q.float().view(*q.size()[:-1], -1, 2)  # B L H D/2 2
-        k_ = k.float().view(*k.size()[:-1], -1, 2)  # B L H D/2 2
 
         # the max start position should be based on the max first position of each sequence
         max_start_pos = torch.max(position_ids[:, 0])
@@ -258,11 +253,5 @@ class RotaryEmbedding(PositionEncoder):
             .sum(5)
             .flatten(3)
         ).type_as(q)
-        k_out = (
-            freqs[:, -k.size(1) :, None, :, :, :]
-            .mul(k_.unsqueeze(-2))
-            .sum(5)
-            .flatten(3)
-        ).type_as(k)
 
-        return q_out.view_as(q), k_out.view_as(k)
+        return q_out.view_as(q)

@@ -42,6 +42,11 @@ def get_scan_plan(device, n, fmap, h):
         .unsqueeze(1)
         .expand(-1, 2)
     )
+    pos = [
+        torch.zeros(0, device=x.device, dtype=torch.int)
+        for _ in range(len(fmap) + 2)
+    ]  # [j] 0
+    pos[1] = torch.arange(x.size(1) + 1, device=x.device, dtype=torch.int).sub(1).clamp(min=0)
     inds = torch.zeros(n, h, 2, device=device, dtype=torch.long)  # n h 2
     inds[:, 0, 1] = torch.arange(n, device=inds.device, dtype=inds.dtype) + 1
     inds[:, :, 0] = 1
@@ -52,35 +57,32 @@ def get_scan_plan(device, n, fmap, h):
         if m < h:
             inds[i, m + 1 :] = inds[i - 1, m + 1 :]
             prev = inds[i - 1, m - 1 : m + 1].flip([0])  # 2 2
-            # assert prev[0, 0] == min(levels[i], len(fmap) + 1) or prev[0, 1] == 0, (
-            #     levels[i],
-            #     prev[0, 0],
-            # )
-            # assert prev[1, 0] == min(levels[i], len(fmap) + 1) or prev[1, 1] == 0, (
-            #     levels[i],
-            #     prev[1, 0],
-            # )
             level = plan[levels[i] + 1]
             inds[i, m, 0] = levels[i] + 1
             inds[i, m, 1] = level.size(0)
             plan[levels[i] + 1] = torch.cat(
                 [plan[levels[i] + 1], prev[:, 1][None]], dim=0
             )
-    return plan, inds
+            pos[levels[i] + 1] = torch.cat(
+                [pos[levels[i] + 1], pos[levels[i]][prev[:, 1]].max()[None]], dim=0
+            )
+    return plan, inds, pos
 
 
-def shrink_plan(plan, inds, l):
+def shrink_plan(plan, inds, pos, l):
     # plan: for each level, which entries to avg from previous level ([h] n' 2)
     # inds: which level and entry to pull from in populating heads (n h 2)
+    # pos: for each level, index position of each entry ([h] n')
     
     # Get modified recursive sum lens
     # First entry is empty, second is seq len plus one for the zero vector entry
     # Subsequent entries are 0 up to 2**(i-2), then increment every 2**(i-1), as seq len increases
     lens = [0,l+1] + [(l-1+2**(i-2))//2**(i-1) for i in range(2,len(plan))]
             
-    # Slim down the plan and imap to desired l
+    # Slim down the plan, pos and imap to desired l
     plan = [p[:l] for p,l in zip(plan,lens)]
     inds = inds[:l]
+    pos = [p[:l] for p,l in zip(pos,lens)]
 
     # Flatten inds (indexing into flattened plan/cache) (n h)
     ls = [p.size(0) for p in plan]
@@ -321,6 +323,9 @@ class MultiHeadAttention(nn.Module):
         self.inp_len = 0
         self.plan = None
         self.imap = None
+        self.posids = None
+
+        # TODO: Update everything below. Note that RoPE should only ever be applied non-permanently!
 
         # fmap = {8 - i: 64 - (i) ** 2 for i in range(8)}
         # fmap.pop(8)
@@ -350,7 +355,7 @@ class MultiHeadAttention(nn.Module):
             elif isinstance(m, LayerNormParameterized) or isinstance(m, QKV):
                 m.reset_parameters()
 
-    def scan(self, x, plan, inds, i, w):
+    def scan(self, x, plan, inds, pos, rope, i, w):
         """
         Takes input x of shape [b n ...] and scan plan, computes recursive sums, and
         extracts cache values into the dimension specified by i > 1.
@@ -382,6 +387,11 @@ class MultiHeadAttention(nn.Module):
 
         # Gather cache    
         cache = torch.cat(cache[1:], dim=1)  # b n' ...
+        # Rope needs: cache: b n h d, pos: 1 n
+        if rope is not None:
+            cs = cache.size()
+            cache = cache.view(cs[0], cs[1], -1, cs[-1])  # b n h d
+            cache = rope.adjusted_qk(cache, pos[None]).view(*cs)
         cache = cache.unsqueeze(i).expand(
             *[-1] * i, inds.size(-1), *[-1] * (len(s) - i)
         )  # b n' ... h ...
@@ -466,13 +476,13 @@ class MultiHeadAttention(nn.Module):
         keys = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
         values = v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
 
-        # You want to apply rotary embeddings pre-cache
-        if self.position_encoder is not None:
-            if q_len == 1 and position_ids is None:
-                position_ids = torch.ones(batch_size, q_len, device=q.device).mul(self.step).int()
-            queries, keys = self.position_encoder.adjusted_qk(
-                queries, keys, position_ids, past_key_value_state, use_cache
-            )
+        # # You want to apply rotary embeddings pre-cache
+        # if self.position_encoder is not None:
+        #     if q_len == 1 and position_ids is None:
+        #         position_ids = torch.ones(batch_size, q_len, device=q.device).mul(self.step).int()
+        #     queries, keys = self.position_encoder.adjusted_qk(
+        #         queries, keys, position_ids, past_key_value_state, use_cache
+        #     )
         
         queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
 
