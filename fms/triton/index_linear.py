@@ -483,8 +483,8 @@ def telescoping_bwd_b_kernel(
     # For each (l,c): slice A (bhen'd), slice B (bhen')
     # Combo-sum slices (bhd)
 
-    pid_b = tl.program_id(axis=1)
-    pid_m = tl.program_id(axis=0)
+    pid_b = tl.program_id(axis=0)
+    pid_m = tl.program_id(axis=1)
 
     total_padded_indices = tl.load(total_padded_indices_ptr)
 
@@ -592,8 +592,8 @@ def invoke_telescoping_bwd_b_kernel(
 
     output = torch.zeros((b, n, h, d), dtype=torch.float32, device=A.device)
     grid = lambda META: (
-        triton.cdiv(padded_indices_per_block.shape[0], META["block_size_m"]),
         triton.cdiv(b, META["block_size_b"]),
+        triton.cdiv(padded_indices_per_block.shape[0], META["block_size_m"]),
     )
 
     telescoping_bwd_b_kernel[grid](
@@ -732,7 +732,7 @@ class IndLinear(torch.autograd.Function):
 
         config_b = {
             "block_size_b": 2,
-            "block_size_m": 16,
+            "block_size_m": 32,
         }
         B_grad = invoke_telescoping_bwd_b_kernel(A, B, G, M, Mp, Mv, Mt, config_b)
 
@@ -769,7 +769,7 @@ class IndLinearTransposed(torch.autograd.Function):
 
         config_b = {
             "block_size_b": 1,
-            "block_size_m": 16,
+            "block_size_m": 32,
         }
         B_grad = invoke_telescoping_bwd_b_kernel(G, B, A, M, Mp, Mv, Mt, config_b)
 
