@@ -548,10 +548,10 @@ class MultiHeadAttention(nn.Module):
             # sink = queries.sum(3)  # b l he
 
             # You want to apply rotary embeddings pre-cache
-            if self.position_encoder is not None:
-                queries = self.position_encoder.adjusted_qk(
-                    queries, position_ids, past_key_value_state, use_cache
-                )
+            # if self.position_encoder is not None:
+            #     queries = self.position_encoder.adjusted_qk(
+            #         queries, position_ids, past_key_value_state, use_cache
+            #     )
 
         queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
 
@@ -567,7 +567,7 @@ class MultiHeadAttention(nn.Module):
             w = queries.matmul(keys.unsqueeze(-1)).squeeze(-1).logsumexp(-1, True)  # b l h 1
         if not self.scan_impl:
             # keys = keys.view(batch_size, kv_len, -1)
-            keys = self.scan(keys, self.plan, self.position_encoder, 4, w)  # b l h d 64
+            keys = self.scan(keys, self.plan, None, 4, w)  # b l h d 64
             values = self.scan(values, self.plan, None, 3, w)  # b l h 64 d
         else:
             gate = self.gates.repeat(4,1,1)[None]  # 1 l 64 64
