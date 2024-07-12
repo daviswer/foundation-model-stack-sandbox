@@ -731,8 +731,8 @@ class IndLinear(torch.autograd.Function):
         A_grad = invoke_telescoping_bwd_a_kernel(G, B, M, config_a)
 
         config_b = {
-            "block_size_b": 2,
-            "block_size_m": 32,
+            "block_size_b": 1,
+            "block_size_m": 16,
         }
         B_grad = invoke_telescoping_bwd_b_kernel(A, B, G, M, Mp, Mv, Mt, config_b)
 
@@ -769,7 +769,7 @@ class IndLinearTransposed(torch.autograd.Function):
 
         config_b = {
             "block_size_b": 1,
-            "block_size_m": 32,
+            "block_size_m": 16,
         }
         B_grad = invoke_telescoping_bwd_b_kernel(G, B, A, M, Mp, Mv, Mt, config_b)
 
