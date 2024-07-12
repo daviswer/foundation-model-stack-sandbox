@@ -335,8 +335,8 @@ class MultiHeadAttention(nn.Module):
         self.cache_size = 128
 
         self.weighted = True
-        if self.weighted:
-            self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
+        # if self.weighted:
+        #     self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
 
         self.indlinear = IndLinear.apply
         self.indlineart = IndLinearTransposed.apply
@@ -481,7 +481,7 @@ class MultiHeadAttention(nn.Module):
         # k/v: b l h d
         w = None
         if self.weighted:
-            w = self.w(k).unsqueeze(-1)  # b l h 1
+            w = queries.matmul(keys.unsqueeze(-1)).squeeze(-1).logsumexp(-1, True)  # b l h 1
         keys = self.scan(keys, self.plan, None, 4, w)  # b n h d
         values = self.scan(values, self.plan, None, 3, w)  # b n h d
 
