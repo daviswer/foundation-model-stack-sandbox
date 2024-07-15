@@ -53,6 +53,7 @@ class LLaMAConfig(ModelConfig):
     attn_bias: bool = False
     mlp_bias: bool = False
     tie_heads: bool = False
+    rope_ratio: int = 10000
 
 
 class LLaMABlock(nn.Module):
@@ -195,6 +196,7 @@ class LLaMA(nn.Module):
             dim=self.config.emb_dim // self.config.nheads,
             ntk_scaling=self.config.ntk_scaling,
             max_seq_len=self.config.max_expected_seq_len,
+            ratio=self.config.rope_ratio,
         )
         # RoPE init
         if isinstance(self.distributed_strategy, UniformModelParallelStrategy):
@@ -386,6 +388,7 @@ _8b_config = LLaMAConfig(
     nlayers=32,
     hidden_grow_factor=3.5,
     max_expected_seq_len=8192,
+    rope_ratio=500_000,
 )
 # todo: add 35B config
 
