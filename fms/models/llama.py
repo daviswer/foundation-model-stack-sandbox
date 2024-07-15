@@ -388,7 +388,7 @@ _8b_config = LLaMAConfig(
     nlayers=32,
     hidden_grow_factor=3.5,
     max_expected_seq_len=8192,
-    rope_ratio=500_000,
+    rope_ratio=50_000,
 )
 # todo: add 35B config
 
