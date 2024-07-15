@@ -506,6 +506,7 @@ class MultiHeadAttention(nn.Module):
         queries = queries.view(batch_size, q_len, self.nheads, self.emb_kq_per_head).transpose(0,1)
 
         # q/k/v: b h n d
+        print(queries.shape, keys_e.shape, values_e.shape)
         attn = F.scaled_dot_product_attention(queries, keys_e, values_e, self.mask)
         attn = attn.transpose(1,2)  # b l h d
         attn = attn.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
