@@ -496,19 +496,18 @@ class MultiHeadAttention(nn.Module):
         # q/k/v: b n h d
         # Expand kv so black-box attn will work
         if expansion != 1:
-            keys_e = keys.transpose(0,1).unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
+            keys_e = keys.transpose(1,2).unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
             values_e = (
-                values.transpose(0,1).unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
+                values.transpose(1,2).unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
             )
         else:
-            keys_e = keys.transpose(0,1)
-            values_e = values.transpose(0,1)
-        print(queries.shape, keys_e.shape, values_e.shape, self.mask.shape)
+            keys_e = keys.transpose(1,2)
+            values_e = values.transpose(1,2)
         queries = queries.view(batch_size, q_len, self.nheads, self.emb_kq_per_head).transpose(0,1)
 
         # q/k/v: b h n d
         attn = F.scaled_dot_product_attention(queries, keys_e, values_e, self.mask)
-        attn = attn.transpose(0,1)  # b l h d
+        attn = attn.transpose(1,2)  # b l h d
         attn = attn.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
         out = self.dense(attn)
 
