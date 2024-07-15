@@ -348,11 +348,7 @@ class MultiHeadAttention(nn.Module):
         # if self.weighted:
         #     self.w = nn.Linear(self.emb_dim, self.kvheads, bias=False)
 
-        self.indlinear = IndLinear.apply
-        self.indlineart = IndLinearTransposed.apply
-        self.Mv = None
-        self.Mp = None
-        self.Mt = None
+        self.mask = None
 
     def reset_parameters(self):
         for m in self.modules():
@@ -366,14 +362,13 @@ class MultiHeadAttention(nn.Module):
     def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
         return TPMultiHeadAttention.import_module(self, group)
 
-    def scan(self, x, plan, ln, i, w=None):
+    def scan(self, x, plan, w=None):
         """
         Takes input x of shape [b n ...] and scan plan, computes recursive sums, and
         extracts cache values into the dimension specified by i > 1.
         Final output shape is therefore [b n ... c ...] with c the cache size.
         Applies specified LN to cache, so LN size should match x.size(-1).
         """
-        assert i > 1, "Output must maintain batch and seqlen in first two dimensions"
         s = x.size()
         weighted = w is not None
         if weighted:
@@ -381,7 +376,6 @@ class MultiHeadAttention(nn.Module):
             weights = nn.functional.pad(w.view(s[0], s[1], -1), (0,0,1,0), value=-1000).view(
                 s[0], s[1] + 1, *ws[2:]
             )
-        inds = plan[-1]  # n h
         plan = plan[:-1]
         # Plan and inds are formed, construct cache via recursive sums
         cache = [None for _ in plan]
@@ -404,8 +398,6 @@ class MultiHeadAttention(nn.Module):
                 cache[j] = cache[j].sum(2).div(2**0.5)
             
         cache = torch.cat(cache[1:], dim=1)  # b n' ...
-        if ln is not None:
-            cache = ln(cache)
         return cache
         # cache = cache.unsqueeze(i).expand(
         #     *[-1] * i, inds.size(-1), *[-1] * (len(s) - i)
@@ -484,63 +476,37 @@ class MultiHeadAttention(nn.Module):
                     queries, keys, position_ids, past_key_value_state, use_cache
                 )
 
-        queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
-        expansion = self.nheads // self.kvheads
-        queries = queries.unflatten(2, (self.kvheads, expansion))  # b l h e d
-        # sink = sink / (self.emb_kq_per_head**0.5)
-
         # Build telescoping cache
         # k/v: b l h d
         w = None
         if self.weighted:
-            w = queries.matmul(keys.unsqueeze(-1)).squeeze(-1).logsumexp(-1, True)  # b l h 1
-        keys = self.scan(keys, self.plan, None, 4, w)  # b n h d
-        values = self.scan(values, self.plan, None, 3, w)  # b n h d
+            w = queries.div(self.emb_kq_per_head**0.5).matmul(keys.unsqueeze(-1)).squeeze(-1).logsumexp(-1, True)  # b l h 1
+        keys = self.scan(keys, self.plan, w)  # b n h d
+        values = self.scan(values, self.plan, w)  # b n h d
 
         # if you built a new scan plan, invert the plan for use by backward kernels
         if keys.size(1) != self.cache_len:
             self.cache_len = keys.size(1)
-            (
-                padded_indices_per_block,
-                value_block_mapping,
-                total_padded_indices,
-            ) = invert_mapping_gpu(self.plan[-1], keys.size(1), 16)
-            self.Mp = padded_indices_per_block
-            self.Mv = value_block_mapping
-            self.Mt = total_padded_indices
+            self.mask = torch.zeros(self.cache_len, q_len, device=q.device, dtype=torch.bool)
+            with torch.no_grad():
+                self.mask.scatter_(1, self.plan[-1], 1)
 
-        # if you want to use caching and past_key_value_state is not None meaning you have values in your cache
-        if (
-            use_cache
-            and past_key_value_state is not None
-            and past_key_value_state[0].numel() > 0
-        ):
-            if is_self:
-                keys = torch.cat((past_key_value_state[0], keys), dim=2)
-                values = torch.cat((past_key_value_state[1], values), dim=2)
-            else:
-                keys = past_key_value_state[0]
-                values = past_key_value_state[1]
+        # q/k/v: b n h d
+        # Expand kv so black-box attn will work
+        expansion = self.nheads // self.kvheads
+        if expansion != 1:
+            keys_e = keys.transpose(0,1).unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
+            values_e = (
+                values.transpose(0,1).unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
+            )
+        else:
+            keys_e = keys
+            values_e = values
+        queries = queries.transpose(0,1)
 
-        # b l h e d, b n h d, l c
-        attn = self.indlinear(
-            queries, 
-            keys, 
-            self.plan[-1],
-            self.Mp,
-            self.Mv,
-            self.Mt
-        )  # b l h e c
-        attn = attn.softmax(4)
-        attn = self.indlineart(
-            attn, 
-            values, 
-            self.plan[-1],
-            self.Mp,
-            self.Mv,
-            self.Mt,
-        )  # b l h e d
-
+        # q/k/v: b h n d
+        attn = F.scaled_dot_product_attention(queries, keys_e, values_e, self.mask)
+        attn = attn.transpose(0,1)  # b l h d
         attn = attn.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
         out = self.dense(attn)
 
