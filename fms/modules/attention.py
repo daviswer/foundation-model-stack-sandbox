@@ -489,9 +489,9 @@ class MultiHeadAttention(nn.Module):
         # if you built a new scan plan, invert the plan for use by backward kernels
         if keys.size(1) != self.cache_len:
             self.cache_len = keys.size(1)
-            self.mask = torch.zeros(self.cache_len, q_len, device=q.device, dtype=torch.bool)
+            self.mask = torch.zeros(q_len, self.cache_len, device=q.device, dtype=torch.bool)
             with torch.no_grad():
-                self.mask.scatter_(1, self.plan[-1], True)
+                self.mask.scatter_(0, self.plan[-1].t(), True)
 
         # q/k/v: b n h d
         # Expand kv so black-box attn will work
