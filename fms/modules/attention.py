@@ -478,6 +478,8 @@ class MultiHeadAttention(nn.Module):
 
         # Build telescoping cache
         # k/v: b l h d
+        expansion = self.nheads // self.kvheads
+        queries = queries.unflatten(2, (self.kvheads, expansion))  # b l h e d
         w = None
         if self.weighted:
             w = queries.div(self.emb_kq_per_head**0.5).matmul(keys.unsqueeze(-1)).squeeze(-1).logsumexp(-1, True)  # b l h 1
@@ -502,7 +504,7 @@ class MultiHeadAttention(nn.Module):
         else:
             keys_e = keys
             values_e = values
-        queries = queries.transpose(0,1)
+        queries = queries.view(batch_size, q_len, self.nheads, self.emb_kq_per_head).transpose(0,1)
 
         # q/k/v: b h n d
         attn = F.scaled_dot_product_attention(queries, keys_e, values_e, self.mask)
