@@ -496,7 +496,7 @@ class MultiHeadAttention(nn.Module):
                 flags = torch.ones(1, q_len, device=q.device)
                 flags = self.scan(flags, self.plan, flags)
                 flags = flags[0].bool().logical_not()
-                mask[:,flags] = False
+                self.mask[:,flags] = False
 
         # q/k/v: b n h d
         # Expand kv so black-box attn will work
