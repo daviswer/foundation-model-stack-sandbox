@@ -416,10 +416,10 @@ class MultiHeadAttention(nn.Module):
             if update_ringmap:
                 self.ringmap = self.ringmap.roll(1)
         else:
-            w_ = weights[:,:,self.ringmap[key-1:key+1]].softmax(2)  # b h 2
+            w_ = weights[:,:,self.ringmap[key-1:key+1]]  # b h 2
             c_ = cache[:,:,self.ringmap[key-1:key+1]]  # b h 2 d
-            cache[:,:,self.ringmap[key]] = c_.mul(w_.unsqueeze(3)).sum(2)
-            weights[:,:,self.ringmap[key]] = w_.mul(w_).sum(2)
+            cache[:,:,self.ringmap[key]] = c_.mul(w_.softmax(2).unsqueeze(3)).sum(2)
+            weights[:,:,self.ringmap[key]] = w_.logsumexp(2)
             cache[:,:,self.ringmap[key-1]] = x
             weights[:,:,self.ringmap[key-1]] = w
             if update_ringmap:
