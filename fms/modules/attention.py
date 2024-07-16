@@ -492,6 +492,11 @@ class MultiHeadAttention(nn.Module):
             self.mask = torch.zeros(q_len, self.cache_len, device=q.device, dtype=torch.bool)
             with torch.no_grad():
                 self.mask.scatter_(1, self.plan[-1], True)
+                # zero out zero entries
+                flags = torch.ones(1, q_len, device=q.device)
+                flags = self.scan(flags, self.plan, flags)
+                flags = flags[0].bool().logical_not()
+                mask[:,flags] = False
 
         # q/k/v: b n h d
         # Expand kv so black-box attn will work
