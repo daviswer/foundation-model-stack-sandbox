@@ -478,11 +478,10 @@ class MultiHeadAttention(nn.Module):
                 queries, keys, position_ids, past_key_value_state, use_cache
             )
         
-        queries = queries / (self.emb_kq_per_head**0.5)  # b l h d
-
         # Advance caches
         if q_len == 1:
-            w = queries.view(batch_size, 1, self.kvheads, -1, self.emb_kq_per_head)  # b 1 h e d
+            w = queries.div(self.emb_kq_per_head**0.5)
+            w = w.view(batch_size, 1, self.kvheads, -1, self.emb_kq_per_head)  # b 1 h e d
             w = w.mul(keys.unsqueeze(-2)).sum(-1).logsumexp(-1).squeeze(1)  # b h
             past_key_value_state[0], past_key_value_state[2] = self.advance(
                 past_key_value_state[0][:,0], 
@@ -513,7 +512,7 @@ class MultiHeadAttention(nn.Module):
                 self.plan, self.imap = get_scan_plan(q.device, self.inp_len, self.fmap, self.cache_size)
             plan, imap = shrink_plan(self.plan, self.imap, q_len)
             # Get weights
-            w = queries.view(
+            w = queries.div(self.emb_kq_per_head**0.5).view(
                 batch_size, q_len, self.kvheads, -1, self.emb_kq_per_head
             ).matmul(keys.unsqueeze(-1)).squeeze(-1).logsumexp(-1)  # b l h
             # Scan
