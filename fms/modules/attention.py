@@ -350,14 +350,13 @@ class MultiHeadAttention(nn.Module):
             elif isinstance(m, LayerNormParameterized) or isinstance(m, QKV):
                 m.reset_parameters()
 
-    def scan(self, x, plan, inds, i, w):
+    def scan(self, x, plan, inds, w):
         """
         Takes input x of shape [b n ...] and scan plan, computes recursive sums, and
         extracts cache values into the dimension specified by i > 1.
         Final output shape is therefore [b n ... c ...] with c the cache size.
         Applies specified LN to cache, so LN size should match x.size(-1).
         """
-        assert i > 1, "Output must maintain batch and seqlen in first two dimensions"
         s = x.size()
         ws = w.size()
         # Plan and inds are formed, construct cache via recursive sums
@@ -382,14 +381,19 @@ class MultiHeadAttention(nn.Module):
 
         # Gather cache    
         cache = torch.cat(cache[1:], dim=1)  # b n' ...
-        cache = cache.unsqueeze(i).expand(
-            *[-1] * i, inds.size(-1), *[-1] * (len(s) - i)
-        )  # b n' ... h ...
-        inds_ = inds.view(
-            1, inds.size(0), *[1] * (i - 2), inds.size(1), *[1] * (len(s) - i)
-        )  # 1 n 111 h 111
-        inds_ = inds_.expand(s[0], -1, *s[2:i], -1, *s[i:])  # b n ... h ...
-        cache = cache.gather(1, inds_)  # b n ... h ...
+        inds_ = inds[-1]  # h
+        state = cache.index_select(1, inds_)  # b h ...
+        wt = state.shape
+        state = state.view(wt[0], wt[1], -1).transpose(1,2)  # b -1 h
+        state = state.reshape(wt[0], 1, *wt[2:], -1)  # b 1 ... h
+        # cache = cache.unsqueeze(i).expand(
+        #     *[-1] * i, inds.size(-1), *[-1] * (len(s) - i)
+        # )  # b n' ... h ...
+        # inds_ = inds.view(
+        #     1, inds.size(0), *[1] * (i - 2), inds.size(1), *[1] * (len(s) - i)
+        # )  # 1 n 111 h 111
+        # inds_ = inds_.expand(s[0], -1, *s[2:i], -1, *s[i:])  # b n ... h ...
+        # cache = cache.gather(1, inds_)  # b n ... h ...
         
         # Gather final weights
         weights = torch.cat(weights[1:], dim=1)  # b n' ...
@@ -398,7 +402,7 @@ class MultiHeadAttention(nn.Module):
         weights = weights.view(ws[0],weights.size(1),-1).transpose(1,2)  # b -1 h
         weights = weights.reshape(ws[0], 1, *ws[2:], -1)  # b 1 ... h
 
-        return cache, weights
+        return state.transpose(-1,-2), weights, cache
     
     def advance(self, cache, weights, x, w, update_ringmap=True):
         # cache: b h c d
@@ -416,10 +420,10 @@ class MultiHeadAttention(nn.Module):
             if update_ringmap:
                 self.ringmap = self.ringmap.roll(1)
         else:
-            w_ = weights[:,:,self.ringmap[key-1:key+1]].softmax(2)  # b h 2
+            w_ = weights[:,:,self.ringmap[key-1:key+1]]  # b h 2
             c_ = cache[:,:,self.ringmap[key-1:key+1]]  # b h 2 d
-            cache[:,:,self.ringmap[key]] = c_.mul(w_.unsqueeze(3)).sum(2)
-            weights[:,:,self.ringmap[key]] = w_.mul(w_).sum(2)
+            cache[:,:,self.ringmap[key]] = c_.mul(w_.softmax(2).unsqueeze(3)).sum(2)
+            weights[:,:,self.ringmap[key]] = w_.mul(w_.softmax(2)).sum(2)
             cache[:,:,self.ringmap[key-1]] = x
             weights[:,:,self.ringmap[key-1]] = w
             if update_ringmap:
@@ -495,6 +499,9 @@ class MultiHeadAttention(nn.Module):
                 True
             )
             past_key_value_state = [x.unsqueeze(1) for x in past_key_value_state]
+            keys = past_key_value_state[0].squeeze(1).transpose(1,2)
+            values = past_key_value_state[1].squeeze(1).transpose(1,2)
+            mask_ = (past_key_value_state[2][0,0,0] > -100)  # c
         else:
             # Reset caches
             past_key_value_state = [None,] * 4
@@ -510,28 +517,44 @@ class MultiHeadAttention(nn.Module):
                 batch_size, q_len, self.kvheads, -1, self.emb_kq_per_head
             ).matmul(keys.unsqueeze(-1)).squeeze(-1).logsumexp(-1)  # b l h
             # Scan
-            past_key_value_state[0], past_key_value_state[2] = self.scan(keys, plan, imap, 3, w)
-            past_key_value_state[1], past_key_value_state[3] = self.scan(values, plan, imap, 3, w)
-
+            past_key_value_state[0], past_key_value_state[2], keys = self.scan(keys, plan, imap, w)  # b 1 h c d, b 1 h c, b n h d
+            past_key_value_state[1], past_key_value_state[3], values = self.scan(values, plan, imap, w)
+            # Get mask
+            mask_ = torch.zeros(q_len, keys.size(1), device=q.device, dtype=torch.bool)  # l n
+            mask_.scatter_(1, imap, True)
+            # Zero out zero entries
+            flags = torch.ones(1, q_len, device=q.device)
+            _,_,flags = self.scan(flags[:,:,None], plan, imap, flags)  # 1 n 1
+            flags = flags.squeeze().bool().logical_not()
+            mask_[:,flags] = False
+            
         # Advance step counter
         self.step += q_len
+        
+        # Handle expansion
+        expansion = self.nheads // self.kvheads
+        if expansion != 1:
+            keys_e = keys.transpose(1,2).unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
+            values_e = (
+                values.transpose(1,2).unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
+            )
+        else:
+            keys_e = keys.transpose(1,2)
+            values_e = values.transpose(1,2)
+        queries = queries.view(batch_size, q_len, self.nheads, self.emb_kq_per_head).transpose(1,2)
 
         # Do attention against caches
-        # q: b l h e d
-        # k: b l h c d
-        # v: b l h c d
-        keys = past_key_value_state[0]
-        values = past_key_value_state[1]
-        queries = queries.view(batch_size, q_len, self.kvheads, -1, self.emb_kq_per_head)
-        attn = queries.matmul(keys.transpose(3,4))  # b l h e c
-        attn = attn.softmax(4)
-        attn = attn.matmul(values)  # b l h e d
-
+        # q: b h l d
+        # k: b h n d
+        # v: b h n d
+        # m: l n
+        attn = F.scaled_dot_product_attention(queries, keys_e, values_e, mask_)
+        attn = attn.transpose(1,2)  # b l h d
         attn = attn.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
         out = self.dense(attn)
 
         if use_cache:
-            return out, [x[:,-1:] for x in past_key_value_state]
+            return out, past_key_value_state  #[x[:,-1:] for x in past_key_value_state]
         else:
             return out
 
