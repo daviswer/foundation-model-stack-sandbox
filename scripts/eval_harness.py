@@ -148,7 +148,7 @@ model = LLaMA(c)
 model.load_state_dict(torch.load(args.model_path)['model_state'], strict=False)
 model = FSDP(
     model,
-    auto_wrap_policy=functools.partial(transformer_auto_wrap_policy, transformer_layer_cls={LLaMABlock})
+    auto_wrap_policy=functools.partial(transformer_auto_wrap_policy, transformer_layer_cls={LLaMABlock}),
     device_id=local_rank,
     limit_all_gathers=True,
 )
