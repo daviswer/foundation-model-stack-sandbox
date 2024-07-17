@@ -133,12 +133,12 @@ else:
 # )
 c = LLaMAConfig(
     src_vocab_size=128256,
-    nlayers=24,
-    nheads=16,
+    nlayers=32,
+    nheads=32,
     kvheads=8,
-    emb_dim=2048,
+    emb_dim=4096,
     hidden_grow_factor=3.5,
-    max_expected_seq_len=4096,
+    max_expected_seq_len=8192,
 )
 model = LLaMA(c)
 model.load_state_dict(torch.load(args.model_path)['model_state'], strict=False)
