@@ -5,11 +5,15 @@ import os
 import lm_eval
 import torch
 import torch._inductor.config
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from lm_eval.utils import make_table
 from torch import distributed as dist
 
-from fms.models.llama import LLaMA, LLaMAConfig
+from fms.models.llama import LLaMA, LLaMAConfig, LLaMABlock
 from fms.utils import evaluation, tokenizers
+
+import functools
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
 # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
@@ -142,7 +146,12 @@ c = LLaMAConfig(
 )
 model = LLaMA(c)
 model.load_state_dict(torch.load(args.model_path)['model_state'], strict=False)
-model = model.to(device)
+model = FSDP(
+    model,
+    auto_wrap_policy=functools.partial(transformer_auto_wrap_policy, transformer_layer_cls={LLaMABlock})
+    device_id=local_rank,
+    limit_all_gathers=True,
+)
 tokenizer = tokenizers.get_tokenizer(args.tokenizer)
 model.eval()
 torch.set_grad_enabled(False)
