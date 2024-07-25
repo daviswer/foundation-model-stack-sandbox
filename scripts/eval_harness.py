@@ -143,6 +143,7 @@ c = LLaMAConfig(
     emb_dim=4096,
     hidden_grow_factor=3.5,
     max_expected_seq_len=8192,
+    rope_ratio=500_000,
 )
 model = LLaMA(c)
 model.load_state_dict(torch.load(args.model_path)['model_state'], strict=False)
