@@ -380,6 +380,16 @@ _micro_char_config = LLaMAConfig(
 
 _7b_config = LLaMAConfig()
 _13b_config = LLaMAConfig(emb_dim=5120, nheads=40, nlayers=40)
+_8b_config = LLaMAConfig(
+    src_vocab_size=128256,
+    emb_dim=4096,
+    nheads=32,
+    kvheads=8,
+    nlayers=32,
+    hidden_grow_factor=3.5,
+    max_expected_seq_len=8192,
+    rope_ratio=500_000,
+)
 # todo: add 35B config
 
 _70b_config = LLaMAConfig(
@@ -405,6 +415,7 @@ models.register_model(
     _architecture_name, "micro", _llama_factory_factory(_micro_char_config)
 )
 models.register_model(_architecture_name, "7b", _llama_factory_factory(_7b_config))
+models.register_model(_architecture_name, "llama3_8b", _llama_factory_factory(_8b_config))
 models.register_model(_architecture_name, "13b", _llama_factory_factory(_13b_config))
 models.register_model(_architecture_name, "70b", _llama_factory_factory(_70b_config))
 
