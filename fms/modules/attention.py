@@ -342,9 +342,9 @@ class MultiHeadAttention(nn.Module):
         #     8:114,
         # }
         # fmap = {1: 64, 2: 118, 3: 162, 4: 194, 5: 214, 6: 226, 7: 236, 8: 244, 9: 250}
-        fmap = {1: 64, 2: 72, 3:80}
+        fmap = {1: 64, 2: 72, 3:80, 4:88}
         self.fmap = fmap
-        self.cache_size = 1024
+        self.cache_size = 512
 
         self.weighted = True
         # if self.weighted:
