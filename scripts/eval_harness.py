@@ -135,15 +135,26 @@ else:
 #     distributed_strategy=distr_param,
 #     group=dist.group.WORLD,
 # )
+# llama3-8b cfg
+# c = LLaMAConfig(
+#     src_vocab_size=128256,
+#     nlayers=32,
+#     nheads=32,
+#     kvheads=8,
+#     emb_dim=4096,
+#     hidden_grow_factor=3.5,
+#     max_expected_seq_len=8192,
+#     rope_ratio=500_000,
+# )
+# 1b cfg
 c = LLaMAConfig(
     src_vocab_size=128256,
-    nlayers=32,
-    nheads=32,
+    emb_dim=2048,
+    nheads=16,
     kvheads=8,
-    emb_dim=4096,
+    nlayers=24,
     hidden_grow_factor=3.5,
-    max_expected_seq_len=8192,
-    rope_ratio=500_000,
+    max_expected_seq_len=4096,
 )
 model = LLaMA(c)
 model.load_state_dict(torch.load(args.model_path)['model_state'], strict=False)
