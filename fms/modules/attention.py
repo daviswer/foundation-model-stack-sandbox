@@ -15,7 +15,8 @@ from fms.distributed.tensorparallel import (
 from fms.modules.layernorm import LayerNormParameterized
 from fms.modules.positions import PositionEncoder
 from fms.modules.tp import TPModule
-from fms.triton.index_linear import IndLinear, IndLinearTransposed, invert_mapping_gpu
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+import functools
 
 
 def get_scan_plan(x, fmap, h):
@@ -513,7 +514,9 @@ class MultiHeadAttention(nn.Module):
         queries = queries.view(batch_size, q_len, self.nheads, self.emb_kq_per_head).transpose(1,2)
 
         # q/k/v: b h n d
-        attn = F.scaled_dot_product_attention(queries, keys_e, values_e, self.mask)
+        block_mask = create_block_mask(self.mask_index, 1, 1, q_len, self.cache_len)
+        attention = functools.partial(flex_attention, block_mask=block_mask, enable_gqa=True)
+        attn = attention(queries, keys_e, values_e)
         attn = attn.transpose(1,2)  # b l h d
         attn = attn.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
         out = self.dense(attn)
@@ -523,6 +526,9 @@ class MultiHeadAttention(nn.Module):
             return out, (keys, values)
         else:
             return out
+        
+    def mask_index(self, b, h, q_i, k_i):
+        return self.mask[q_i, k_i]
 
 
 class TPMultiHeadAttention(MultiHeadAttention, TPModule):
