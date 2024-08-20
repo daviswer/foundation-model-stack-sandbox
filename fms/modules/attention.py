@@ -514,7 +514,7 @@ class MultiHeadAttention(nn.Module):
         queries = queries.view(batch_size, q_len, self.nheads, self.emb_kq_per_head).transpose(1,2)
 
         # q/k/v: b h n d
-        block_mask = create_block_mask(self.mask_index, None, None, q_len, self.cache_len)
+        block_mask = create_block_mask(self.mask_index, 1, 1, q_len, self.cache_len)
         attention = functools.partial(flex_attention, block_mask=block_mask, enable_gqa=True)
         attn = attention(queries, keys_e, values_e)
         attn = attn.transpose(1,2)  # b l h d
