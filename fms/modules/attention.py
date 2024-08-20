@@ -17,6 +17,7 @@ from fms.modules.positions import PositionEncoder
 from fms.modules.tp import TPModule
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 import functools
+flex_attention = torch.compile(flex_attention, dynamic=False)
 
 
 def get_scan_plan(x, fmap, h):
