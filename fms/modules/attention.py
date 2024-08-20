@@ -518,6 +518,7 @@ class MultiHeadAttention(nn.Module):
             # assert q_i < self.mask.size(0), f"q drop: {q_i} vs {self.mask.size(0)}"
             # assert k_i < self.mask.size(1), f"q drop: {k_i} vs {self.mask.size(1)}"
             return mask[q_i, k_i]
+        print(queries.shape, keys_e.shape, self.mask.shape)
         block_mask = create_block_mask(functools.partial(mask_index, self.mask), 1, 1, q_len, self.cache_len)
         attention = functools.partial(flex_attention, block_mask=block_mask, enable_gqa=True)
         attn = attention(queries, keys_e, values_e)
