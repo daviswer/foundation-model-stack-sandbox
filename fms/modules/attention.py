@@ -34,6 +34,20 @@ def get_scan_plan(x, fmap, h):
             for i in range(n.bit_length())
         ]
     ).roll(1, 0)
+    prefix = [h]*h + list(range(h-1, fmap[1]-1, -1))
+    jumps = [fmap.get(x, h) for x in levels.tolist()]
+    lev = list(fmap.keys())
+    lev.pop(0)
+    inter = [fmap[1]]
+    newjumps = []
+    for k in lev:
+        newv = h-1
+        for _ in range(h-1, fmap[k]-1, -1):
+            newjumps += [newv] + inter
+            i += d**(k-1)
+            newv -= 1
+        inter += [fmap[k]] + inter
+    mergeplan = prefix + newjumps + jumps
     plan = [
         torch.zeros(0, 2, device=x.device, dtype=torch.int)
         for _ in range(len(fmap) + 2)
@@ -47,7 +61,7 @@ def get_scan_plan(x, fmap, h):
     inds[:, 0, 1] = torch.arange(n, device=inds.device, dtype=inds.dtype) + 1
     inds[:, :, 0] = 1
     for i in range(1, n):
-        m = fmap.get(levels[i].item(), h)
+        m = mergeplan[i] #fmap.get(levels[i].item(), h)
         inds[i, 1:m] = inds[i - 1, : m - 1]
         if m < h:
             inds[i, m + 1 :] = inds[i - 1, m + 1 :]
