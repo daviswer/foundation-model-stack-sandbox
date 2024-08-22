@@ -44,7 +44,6 @@ def get_scan_plan(x, fmap, h):
         newv = h-1
         for _ in range(h-1, fmap[k]-1, -1):
             newjumps += [newv] + inter
-            i += d**(k-1)
             newv -= 1
         inter += [fmap[k]] + inter
     mergeplan = prefix + newjumps + jumps
