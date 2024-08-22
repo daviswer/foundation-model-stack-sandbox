@@ -39,14 +39,19 @@ def get_scan_plan(x, fmap, h):
     lev = list(fmap.keys())
     lev.pop(0)
     inter = [fmap[1]]
+    inter_lev = [1]
     newjumps = []
+    newjumps_lev = []
     for k in lev:
         newv = h-1
         for _ in range(h-1, fmap[k]-1, -1):
             newjumps += [newv] + inter
+            newjumps_lev += [k] + inter_lev
             newv -= 1
         inter += [fmap[k]] + inter
+        inter_lev += [k] + inter_lev
     mergeplan = prefix + newjumps + jumps
+    mergeplan_lev = [10000]*h + [1]*(len(prefix)-h) + newjumps_lev + levels.tolist()
     plan = [
         torch.zeros(0, 2, device=x.device, dtype=torch.int)
         for _ in range(len(fmap) + 2)
@@ -61,10 +66,12 @@ def get_scan_plan(x, fmap, h):
     inds[:, :, 0] = 1
     for i in range(1, n):
         m = mergeplan[i] #fmap.get(levels[i].item(), h)
+        lev = mergeplan_lev[i]
         inds[i, 1:m] = inds[i - 1, : m - 1]
-        if m < h:
+        if lev < len(fmap):
             inds[i, m + 1 :] = inds[i - 1, m + 1 :]
             prev = inds[i - 1, m - 1 : m + 1].flip([0])  # 2 2
+            assert prev[0,0] == min(lev, len(fmap) + 1) or prev[0, 1] == 0, (lev, prev[0,0])
             # assert prev[0, 0] == min(levels[i], len(fmap) + 1) or prev[0, 1] == 0, (
             #     levels[i],
             #     prev[0, 0],
@@ -73,11 +80,11 @@ def get_scan_plan(x, fmap, h):
             #     levels[i],
             #     prev[1, 0],
             # )
-            level = plan[levels[i] + 1]
-            inds[i, m, 0] = levels[i] + 1
+            level = plan[lev + 1]
+            inds[i, m, 0] = lev + 1
             inds[i, m, 1] = level.size(0)
-            plan[levels[i] + 1] = torch.cat(
-                [plan[levels[i] + 1], prev[:, 1][None]], dim=0
+            plan[lev + 1] = torch.cat(
+                [plan[lev + 1], prev[:, 1][None]], dim=0
             )
     # Flatten inds (indexing into flattened plan/cache) (n h)
     ls = [p.size(0) for p in plan]
