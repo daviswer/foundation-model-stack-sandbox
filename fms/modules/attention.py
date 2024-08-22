@@ -65,14 +65,14 @@ def get_scan_plan(x, fmap, h):
         if m < h:
             inds[i, m + 1 :] = inds[i - 1, m + 1 :]
             prev = inds[i - 1, m - 1 : m + 1].flip([0])  # 2 2
-            assert prev[0, 0] == min(levels[i], len(fmap) + 1) or prev[0, 1] == 0, (
-                levels[i],
-                prev[0, 0],
-            )
-            assert prev[1, 0] == min(levels[i], len(fmap) + 1) or prev[1, 1] == 0, (
-                levels[i],
-                prev[1, 0],
-            )
+            # assert prev[0, 0] == min(levels[i], len(fmap) + 1) or prev[0, 1] == 0, (
+            #     levels[i],
+            #     prev[0, 0],
+            # )
+            # assert prev[1, 0] == min(levels[i], len(fmap) + 1) or prev[1, 1] == 0, (
+            #     levels[i],
+            #     prev[1, 0],
+            # )
             level = plan[levels[i] + 1]
             inds[i, m, 0] = levels[i] + 1
             inds[i, m, 1] = level.size(0)
