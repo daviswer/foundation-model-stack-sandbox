@@ -65,13 +65,13 @@ def get_scan_plan(x, fmap, h):
     inds[:, 0, 1] = torch.arange(n, device=inds.device, dtype=inds.dtype) + 1
     inds[:, :, 0] = 1
     for i in range(1, n):
-        m = mergeplan[i] #fmap.get(levels[i].item(), h)
-        lev = mergeplan_lev[i]
+        m = fmap.get(levels[i].item(), h) # mergeplan[i] #
+        # lev = mergeplan_lev[i]
         inds[i, 1:m] = inds[i - 1, : m - 1]
-        if lev < len(fmap):
+        if m < h: # lev < len(fmap):
             inds[i, m + 1 :] = inds[i - 1, m + 1 :]
             prev = inds[i - 1, m - 1 : m + 1].flip([0])  # 2 2
-            assert prev[0,0] == min(lev, len(fmap) + 1) or prev[0, 1] == 0, (lev, prev[0,0])
+            # assert prev[0,0] == min(lev, len(fmap) + 1) or prev[0, 1] == 0, (lev, prev[0,0])
             # assert prev[0, 0] == min(levels[i], len(fmap) + 1) or prev[0, 1] == 0, (
             #     levels[i],
             #     prev[0, 0],
@@ -80,11 +80,11 @@ def get_scan_plan(x, fmap, h):
             #     levels[i],
             #     prev[1, 0],
             # )
-            level = plan[lev + 1]
-            inds[i, m, 0] = lev + 1
+            level = plan[levels[i] + 1]
+            inds[i, m, 0] = levels[i] + 1
             inds[i, m, 1] = level.size(0)
-            plan[lev + 1] = torch.cat(
-                [plan[lev + 1], prev[:, 1][None]], dim=0
+            plan[levels[i] + 1] = torch.cat(
+                [plan[levels[i] + 1], prev[:, 1][None]], dim=0
             )
     # Flatten inds (indexing into flattened plan/cache) (n h)
     ls = [p.size(0) for p in plan]
@@ -364,7 +364,7 @@ class MultiHeadAttention(nn.Module):
         # fmap = {1: 64, 2: 118, 3: 162, 4: 194, 5: 214, 6: 226, 7: 236, 8: 244, 9: 250}
         fmap = {1: 64, 2: 72, 3:80} #, 4:88}
         self.fmap = fmap
-        self.cache_size = 512 #256
+        self.cache_size = 512 # 256
 
         self.weighted = True
         # if self.weighted:
