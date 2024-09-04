@@ -539,7 +539,9 @@ class MultiHeadAttention(nn.Module):
         def mask_index(mask, b, h, q_i, k_i):
             return mask[q_i.clamp(min=0, max=mask.size(0)-1), k_i.clamp(min=0, max=mask.size(1)-1)]
         block_mask = create_block_mask(functools.partial(mask_index, self.mask), 1, 1, q_len, self.cache_len)
-        attention = functools.partial(flex_attention, block_mask=block_mask)
+        def soft_cap(score, b, h, q_i, kv_i):
+            return 20 * score.div(20).tanh()
+        attention = functools.partial(flex_attention, block_mask=block_mask, score_mod=soft_cap)
         attn = attention(queries, keys_e, values_e)
         attn = attn.transpose(1,2)  # b l h d
         attn = attn.reshape(batch_size, q_len, self.nheads * self.emb_v_per_head)
