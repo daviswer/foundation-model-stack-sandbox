@@ -17,7 +17,7 @@ from fms.distributed.strategy import (
     TensorParallelStrategy,
     UniformModelParallelStrategy,
 )
-from fms.modules.attention import MultiHeadAttention
+from fms.modules.attention import MultiHeadAttention, TelescopingAttention
 from fms.modules.embedding import WordEmbedding
 from fms.modules.feedforward import GatedLinearUnit
 from fms.modules.layernorm import LayerNormParameterized
@@ -57,7 +57,7 @@ class LLaMAConfig(ModelConfig):
 
 
 class LLaMABlock(nn.Module):
-    def __init__(self, config: LLaMAConfig, rotary_emb: RotaryEmbedding):
+    def __init__(self, config: LLaMAConfig, rotary_emb: RotaryEmbedding, attn = None):
         super(LLaMABlock, self).__init__()
         self.config = config
         emb_kq = self.config.emb_dim // self.config.nheads
@@ -86,7 +86,7 @@ class LLaMABlock(nn.Module):
             kvheads = self.config.kvheads
             assert self.config.nheads % self.config.kvheads == 0
 
-        self.attn = MultiHeadAttention(
+        self.attn = attn(
             self.config.emb_dim,
             emb_kq,
             emb_v,
@@ -211,7 +211,7 @@ class LLaMA(nn.Module):
 
         layers = []
         for i in range(self.config.nlayers):
-            block: nn.Module = LLaMABlock(self.config, self.rot_emb)
+            block: nn.Module = LLaMABlock(self.config, self.rot_emb, MultiHeadAttention if i<4 else TelescopingAttention)
             block = self.distributed_strategy.distribute_layer(block, i)
             layers.append(block)
         self.layers = nn.ModuleList(layers)
@@ -243,6 +243,7 @@ class LLaMA(nn.Module):
         for m in self.modules():
             if (
                 isinstance(m, MultiHeadAttention)
+                or isinstance(m, TelescopingAttention)
                 or isinstance(m, WordEmbedding)
                 or isinstance(m, GatedLinearUnit)
                 or isinstance(m, LayerNormParameterized)
