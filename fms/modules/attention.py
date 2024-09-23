@@ -13,12 +13,6 @@ from fms.distributed.tensorparallel import (
     reduce_from_tensor_model_parallel_region,
 )
 from fms.modules.layernorm import LayerNormParameterized
-from fms.modules.linear import (
-    LinearModuleShardingInfo,
-    get_all_linear_type_to_sharding_maps,
-    get_linear,
-    get_linear_type,
-)
 from fms.modules.positions import PositionEncoder
 from fms.modules.tp import TPModule
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask
@@ -530,7 +524,6 @@ class MultiHeadAttention(nn.Module):
         use_bias=False,
         position_encoder: Optional[PositionEncoder] = None,
         fused: bool = True,
-        linear_config: Optional[Mapping[str, Any]] = None,
     ):
         super(MultiHeadAttention, self).__init__()
         self.nheads = nheads
@@ -541,8 +534,6 @@ class MultiHeadAttention(nn.Module):
         self.p_dropout = p_dropout if p_dropout is not None else 0.0
         self.use_bias = use_bias
         self.fused = fused
-        self.linear_config = linear_config
-        self.linear_type = get_linear_type(linear_config)
 
         self.in_proj: QKV = (FusedQKV if self.fused else UnfusedQKV)(
             self.emb_dim,
@@ -551,14 +542,12 @@ class MultiHeadAttention(nn.Module):
             self.emb_kq_per_head,
             self.emb_v_per_head,
             self.use_bias,
-            linear_config=linear_config,
         )
 
-        self.dense = get_linear(
+        self.dense = nn.Linear(
             self.nheads * self.emb_v_per_head,
             self.emb_dim,
             bias=use_bias,
-            linear_config=linear_config,
         )
 
         if self.p_dropout:
