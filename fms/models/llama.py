@@ -211,7 +211,7 @@ class LLaMA(nn.Module):
 
         layers = []
         for i in range(self.config.nlayers):
-            block: nn.Module = LLaMABlock(self.config, self.rot_emb, MultiHeadAttention if i<2 or i>21 else TelescopingAttention)
+            block: nn.Module = LLaMABlock(self.config, self.rot_emb, MultiHeadAttention if i%6==0 else TelescopingAttention)
             block = self.distributed_strategy.distribute_layer(block, i)
             layers.append(block)
         self.layers = nn.ModuleList(layers)
