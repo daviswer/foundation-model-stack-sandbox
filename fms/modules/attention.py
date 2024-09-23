@@ -278,7 +278,7 @@ class TelescopingAttention(nn.Module):
         position_encoder: Optional[PositionEncoder] = None,
         fused: bool = True,
     ):
-        super(MultiHeadAttention, self).__init__()
+        super(TelescopingAttention, self).__init__()
         self.nheads = nheads
         self.kvheads = kvheads
         self.emb_dim = emb_dim
