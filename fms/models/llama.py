@@ -81,7 +81,7 @@ class Grouper(nn.Module):
 class UnGrouper(nn.Module):
     def __init__(self, d):
         super().__init__()
-        self.q = nn.Parameter(torch.randn(d//32,16) / (d//2)**.5)
+        self.q = nn.Parameter(torch.randn(d//32,2,16) / (d//2)**.5)
         # self.beta = nn.Parameter(torch.zeros(d//32))
         self.ln = LayerNormParameterized(16,
                                          elementwise_scale=False,
@@ -90,7 +90,7 @@ class UnGrouper(nn.Module):
     def forward(self, x):
         s = x.size()[:-3]
         q = self.ln(self.q)
-        return x.mul(q.unsqueeze(-2)).sum(-1).view(*s, -1)
+        return x.matmul(q.transpose(-1,-2)).view(*s, -1)
 
 
 class LLaMABlock(nn.Module):
