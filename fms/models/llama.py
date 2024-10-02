@@ -60,36 +60,28 @@ class LLaMAConfig(ModelConfig):
 class Grouper(nn.Module):
     def __init__(self, d):
         super().__init__()
-        # self.q = nn.Parameter(torch.randn(d//32,16) / (d//2)**.5)
-        self.beta = nn.Parameter(torch.zeros(d//32))
-        self.ln = LayerNormParameterized(16,
-                                         elementwise_scale=False,
-                                         elementwise_shift=False,
-                                         use_high_precision_pow=True)
+        self.beta = nn.Parameter(torch.zeros(d//16))
+
     def forward(self, x, state=None):
         s = x.size()
         d = s[-1]
         k,v = torch.chunk(x, 2, dim=-1)
-        k = k.view(*s[:-1], d//32, 1, 16)
-        v = v.view(*s[:-1], d//32, 16, 1)
-        k = self.ln(k)
+        k = k.view(*s[:-1], d//16, 1, 8)
+        v = v.view(*s[:-1], d//16, 8, 1)
+        k = k / k.pow(2).sum(-1,True).sqrt().add(1e-6)
         if state is not None:
-            u = v - state.mul(k).sum(-1, True)
+            u = v - state.matmul(k.transpose(-1,-2))
             return state + u.mul(k.mul(self.beta.sigmoid()[:,None,None]))
         return v.mul(k.mul(self.beta.sigmoid()[:,None,None]))
     
 class UnGrouper(nn.Module):
     def __init__(self, d):
         super().__init__()
-        self.q = nn.Parameter(torch.randn(d//32,2,16) / (d//2)**.5)
-        # self.beta = nn.Parameter(torch.zeros(d//32))
-        self.ln = LayerNormParameterized(16,
-                                         elementwise_scale=False,
-                                         elementwise_shift=False,
-                                         use_high_precision_pow=True)
+        self.q = nn.Parameter(torch.randn(d//16,2,8) / (d//2)**.5)
+
     def forward(self, x):
         s = x.size()[:-3]
-        q = self.ln(self.q)
+        q = self.q / self.q.pow(2).sum(-1,True).sqrt().add(1e-6)
         return x.matmul(q.transpose(-1,-2)).view(*s, -1)
 
 
