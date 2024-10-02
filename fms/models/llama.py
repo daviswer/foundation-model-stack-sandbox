@@ -66,16 +66,16 @@ class Grouper(nn.Module):
                                          elementwise_scale=False,
                                          elementwise_shift=False,
                                          use_high_precision_pow=True)
-    def forward(self, x, s=None):
+    def forward(self, x, state=None):
         s = x.size()
         d = s[-1]
         k,v = torch.chunk(x, 2, dim=-1)
         k = k.view(*s[:-1], d//32, 1, 16)
         v = v.view(*s[:-1], d//32, 16, 1)
         k = self.ln(k)
-        if s is not None:
-            u = v - s.mul(k).sum(-1, True)
-            return s + u.mul(k.mul(self.beta.sigmoid()[:,None,None]))
+        if state is not None:
+            u = v - state.mul(k).sum(-1, True)
+            return state + u.mul(k.mul(self.beta.sigmoid()[:,None,None]))
         return v.mul(k.mul(self.beta.sigmoid()[:,None,None]))
     
 class UnGrouper(nn.Module):
