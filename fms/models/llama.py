@@ -57,12 +57,50 @@ class LLaMAConfig(ModelConfig):
     unfuse_strategy: Optional[str] = None  # TODO: could be an Enum
 
 
+class Grouper(nn.Module):
+    def __init__(self, d):
+        super().__init__()
+        # self.q = nn.Parameter(torch.randn(d//32,16) / (d//2)**.5)
+        self.beta = nn.Parameter(torch.zeros(d//32))
+        self.ln = LayerNormParameterized(16,
+                                         elementwise_scale=False,
+                                         elementwise_shift=False,
+                                         use_high_precision_pow=True)
+    def forward(self, x, s=None):
+        s = x.size()
+        d = s[-1]
+        k,v = torch.chunk(x, 2, dim=-1)
+        k = k.view(*s[:-1], d//32, 1, 16)
+        v = v.view(*s[:-1], d//32, 16, 1)
+        k = self.ln(k)
+        if s is not None:
+            u = v - s.mul(k).sum(-1, True)
+            return s + u.mul(k.mul(self.beta.sigmoid()[:,None,None]))
+        return v.mul(k.mul(self.beta.sigmoid()[:,None,None]))
+    
+class UnGrouper(nn.Module):
+    def __init__(self, d):
+        super().__init__()
+        self.q = nn.Parameter(torch.randn(d//32,16) / (d//2)**.5)
+        # self.beta = nn.Parameter(torch.zeros(d//32))
+        self.ln = LayerNormParameterized(16,
+                                         elementwise_scale=False,
+                                         elementwise_shift=False,
+                                         use_high_precision_pow=True)
+    def forward(self, x):
+        s = x.size()[:-3]
+        q = self.ln(self.q)
+        return x.mul(q.unsqueeze(-2)).sum(-1).view(*s, -1)
+
+
 class LLaMABlock(nn.Module):
     def __init__(self, config: LLaMAConfig, rotary_emb: RotaryEmbedding):
         super(LLaMABlock, self).__init__()
         self.config = config
         emb_kq = self.config.emb_dim // self.config.nheads
         emb_v = self.config.emb_dim // self.config.nheads
+        self.group = Grouper(self.config.emb_dim)
+        self.ungroup = UnGrouper(self.config.emb_dim)
 
         self.ln = LayerNormParameterized(
             self.config.emb_dim,
@@ -133,6 +171,7 @@ class LLaMABlock(nn.Module):
 
         # first we do MHA and Add&Norm
         residual = x
+        x = self.ungroup(x)
         x = self.ln(x)
         x = self.attn(
             q=x,
@@ -150,16 +189,19 @@ class LLaMABlock(nn.Module):
         if self.config.p_dropout != 0:
             x = self.dropout(x)
         # residual connection
-        x = x + residual
+        # x = x + residual
+        x = self.group(x, residual)
 
         # then we do FF and Add&Norm
         residual = x
+        x = self.ungroup(x)
         x = self.ff_ln(x)
         x = self.ff_sub_layer(x)
         if self.config.p_dropout != 0:
             x = self.dropout(x)
         # another residual
-        x = x + residual
+        # x = x + residual
+        x = self.group(x, residual)
 
         if use_cache:
             return (x, cache)
@@ -243,6 +285,9 @@ class LLaMA(nn.Module):
 
         if self.config.p_dropout:
             self.dropout = nn.Dropout(self.config.p_dropout)
+
+        self.group = Grouper(self.config.emb_dim)
+        self.ungroup = UnGrouper(self.config.emb_dim)
 
     def get_config(self) -> LLaMAConfig:
         return self.config
@@ -369,6 +414,7 @@ class LLaMA(nn.Module):
             is_causal_mask = False
 
         x_in = self.shared(x_in)
+        x_in = self.group(x_in)
 
         # this is the output cache for all the decoder layers
         present_key_value_states = []
@@ -391,6 +437,7 @@ class LLaMA(nn.Module):
             else:
                 x_in = output
 
+        x_in = self.ungroup(x_in)
         dec_out = x_in
         dec_out = self.dec_norm(dec_out)
         if self.config.p_dropout:
