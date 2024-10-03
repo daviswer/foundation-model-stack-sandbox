@@ -82,7 +82,7 @@ class UnGrouper(nn.Module):
     def __init__(self, d):
         super().__init__()
         self.d = d
-        self.q = nn.Parameter(torch.zeros(d//16,2,8)) # / (d//2)**.5)
+        self.q = nn.Parameter(torch.randn(d//16,2,8) / d**.5)
 
     def forward(self, x):
         s = x.size()[:-3]
@@ -90,8 +90,7 @@ class UnGrouper(nn.Module):
         return x.matmul(self.q.transpose(-1,-2)).view(*s, -1)
     
     def reset_parameters(self):
-        self.q.data.zero_()
-        # nn.init.normal_(self.q, 0, (self.d//2)**.5)
+        nn.init.normal_(self.q, 0, 1/self.d**.5)
 
 
 class LLaMABlock(nn.Module):
