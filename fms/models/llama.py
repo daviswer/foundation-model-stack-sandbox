@@ -61,6 +61,7 @@ class Grouper(nn.Module):
     def __init__(self, d):
         super().__init__()
         self.beta = nn.Parameter(torch.zeros(d//16))
+        self.delta = nn.Parameter(torch.zeros(d//16))
 
     def forward(self, x, state=None):
         s = x.size()
@@ -70,13 +71,14 @@ class Grouper(nn.Module):
         v = v.view(*s[:-1], d//16, 8, 1)
         k = k / k.pow(2).sum(-1,True).sqrt().add(1e-6)
         if state is not None:
-            # u = v - state.matmul(k.transpose(-1,-2))
-            # return state + u.mul(k.mul(self.beta.sigmoid()[:,None,None]))
-            return state + v.mul(k.mul(self.beta.sigmoid()[:,None,None]))
+            u = v - state.matmul(k.transpose(-1,-2)).mul(self.delta.sigmoid()[:,None,None])
+            return state + u.mul(k.mul(self.beta.sigmoid()[:,None,None]))
+            # return state + v.mul(k.mul(self.beta.sigmoid()[:,None,None]))
         return v.mul(k.mul(self.beta.sigmoid()[:,None,None]))
     
     def reset_parameters(self):
         self.beta.data.zero_()
+        self.delta.data.zero_()
     
 class UnGrouper(nn.Module):
     def __init__(self, d):
