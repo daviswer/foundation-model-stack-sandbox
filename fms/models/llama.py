@@ -74,15 +74,22 @@ class Grouper(nn.Module):
             return state + u.mul(k.mul(self.beta.sigmoid()[:,None,None]))
         return v.mul(k.mul(self.beta.sigmoid()[:,None,None]))
     
+    def reset_parameters(self):
+        self.beta.data.zero_()
+    
 class UnGrouper(nn.Module):
     def __init__(self, d):
         super().__init__()
+        self.d = d
         self.q = nn.Parameter(torch.randn(d//16,2,8) / (d//2)**.5)
 
     def forward(self, x):
         s = x.size()[:-3]
         q = self.q / self.q.pow(2).sum(-1,True).sqrt().add(1e-6)
         return x.matmul(q.transpose(-1,-2)).view(*s, -1)
+    
+    def reset_parameters(self):
+        nn.init.normal_(self.q, 0, (self.d//2)**.5)
 
 
 class LLaMABlock(nn.Module):
@@ -296,6 +303,8 @@ class LLaMA(nn.Module):
                 or isinstance(m, WordEmbedding)
                 or isinstance(m, GatedLinearUnit)
                 or isinstance(m, LayerNormParameterized)
+                or isinstance(m, Grouper)
+                or isinstance(m, UnGrouper)
             ):
                 m.reset_parameters()
 
