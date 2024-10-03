@@ -87,7 +87,7 @@ class UnGrouper(nn.Module):
     def forward(self, x):
         s = x.size()[:-3]
         # q = self.q / self.q.pow(2).sum(-1,True).sqrt().add(1e-6)
-        return x.matmul(self.q.transpose(-1,-2).mul(d**.5 / 8**.5)).view(*s, -1)
+        return x.matmul(self.q.transpose(-1,-2).mul(self.d**.5 / 8**.5)).view(*s, -1)
     
     def reset_parameters(self):
         nn.init.normal_(self.q, 0, 1/self.d**.5)
