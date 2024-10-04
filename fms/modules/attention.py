@@ -462,7 +462,7 @@ class TelescopingAttention(nn.Module):
         if expansion != 1:
             keys_e = keys.transpose(1,2).unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
             values_e = (
-                values.transpose(1,2).unsqueeze(2).expand(-1, expansion, -1, -1, -1).flatten(1, 2)
+                values.transpose(1,2).unsqueeze(1).expand(-1, expansion, -1, -1, -1).flatten(1, 2)
             )
         else:
             keys_e = keys.transpose(1,2)
@@ -668,7 +668,7 @@ class MultiHeadAttention(nn.Module):
         if expansion != 1:
             keys_e = keys.unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
             values_e = (
-                values.unsqueeze(2).expand(-1, expansion, -1, -1, -1).flatten(1, 2)
+                values.unsqueeze(1).expand(-1, expansion, -1, -1, -1).flatten(1, 2)
             )
         else:
             keys_e = keys
