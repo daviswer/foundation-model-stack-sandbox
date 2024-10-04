@@ -421,7 +421,7 @@ class TelescopingAttention(nn.Module):
         # b x h x kvlen x ds
         # todo: Cross attention (This always is true for now)
         if is_self or past_key_value_state is None:
-            q_out, k_out, v_out = self.in_proj(q, k, v)
+            q_out, k_out = self.in_proj(q, k, v)
 
             # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
             queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
@@ -620,7 +620,7 @@ class MultiHeadAttention(nn.Module):
         # b x h x kvlen x ds
         # todo: Cross attention (This always is true for now)
         if is_self or past_key_value_state is None:
-            q_out, k_out, v_out = self.in_proj(q, k, v)
+            q_out, k_out = self.in_proj(q, k, v)
 
             # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
             queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
