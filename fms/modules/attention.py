@@ -220,7 +220,7 @@ class FusedQKV(QKV):
         self.splits = [
             self.nheads * self.emb_kq_per_head,
             self.kvheads * self.emb_kq_per_head,
-            self.kvheads * self.emb_v_per_head,
+            # self.kvheads * self.emb_v_per_head,
         ]
 
         self.qkv_fused = nn.Linear(
@@ -296,6 +296,8 @@ class TelescopingAttention(nn.Module):
             self.emb_v_per_head,
             self.use_bias,
         )
+
+        assert self.emb_kq_per_head == self.emb_v_per_head, "k and v dim must match!"
 
         self.dense = nn.Linear(
             self.nheads * self.emb_v_per_head, self.emb_dim, bias=use_bias
@@ -424,7 +426,7 @@ class TelescopingAttention(nn.Module):
             # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
             queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
             keys = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
-            values = v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
+            values = keys #v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
             # sink = queries.sum(3)  # b l he
 
             # You want to apply rotary embeddings pre-cache
@@ -441,7 +443,7 @@ class TelescopingAttention(nn.Module):
         wv = None
         if self.weighted:
             wk = keys.pow(2).sum(-1, True).div(self.emb_kq_per_head**0.5)  # b l h 1
-            wv = values.pow(2).sum(-1, True).div(self.emb_v_per_head**0.5)  # b l h 1
+            wv = wk #values.pow(2).sum(-1, True).div(self.emb_v_per_head**0.5)  # b l h 1
         keys = self.scan(keys, self.plan, wk)  # b n h d
         values = self.scan(values, self.plan, wv)  # b n h d
 
@@ -623,7 +625,7 @@ class MultiHeadAttention(nn.Module):
             # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
             queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
             keys = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
-            values = v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
+            values = keys #v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
 
             # You want to apply rotary embeddings pre-cache
             if self.position_encoder is not None:
