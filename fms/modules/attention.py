@@ -437,11 +437,13 @@ class TelescopingAttention(nn.Module):
         # k/v: b l h d
         expansion = self.nheads // self.kvheads
         queries = queries.unflatten(2, (self.kvheads, expansion))  # b l h e d
-        w = None
+        wk = None
+        wv = None
         if self.weighted:
-            w = queries.div(self.emb_kq_per_head**0.5).matmul(keys.unsqueeze(-1)).squeeze(-1).logsumexp(-1, True)  # b l h 1
-        keys = self.scan(keys, self.plan, w)  # b n h d
-        values = self.scan(values, self.plan, w)  # b n h d
+            wk = keys.pow(2).sum(-1, True).div(self.emb_kq_per_head**0.5)  # b l h 1
+            wv = values.pow(2).sum(-1, True).div(self.emb_v_per_head**0.5)  # b l h 1
+        keys = self.scan(keys, self.plan, wk)  # b n h d
+        values = self.scan(values, self.plan, wv)  # b n h d
 
         # if you built a new scan plan, invert the plan for use by backward kernels
         if keys.size(1) != self.cache_len:
@@ -460,7 +462,7 @@ class TelescopingAttention(nn.Module):
         if expansion != 1:
             keys_e = keys.transpose(1,2).unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
             values_e = (
-                values.transpose(1,2).unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
+                values.transpose(1,2).unsqueeze(2).expand(-1, expansion, -1, -1, -1).flatten(1, 2)
             )
         else:
             keys_e = keys.transpose(1,2)
@@ -666,7 +668,7 @@ class MultiHeadAttention(nn.Module):
         if expansion != 1:
             keys_e = keys.unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
             values_e = (
-                values.unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
+                values.unsqueeze(2).expand(-1, expansion, -1, -1, -1).flatten(1, 2)
             )
         else:
             keys_e = keys
