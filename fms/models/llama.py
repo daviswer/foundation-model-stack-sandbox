@@ -267,7 +267,10 @@ class LLaMA(nn.Module):
             elif isinstance(m, QKV):
                 m.reset_parameters(scale=self.config.mup_ffn_init)
             elif isinstance(m, WordEmbedding):
-                m.reset_parameters(in_scale=self.config.mup_emb_scale, out_scale=self.config.mup_head_scale)
+                m.reset_parameters(
+                    in_scale=self.config.mup_emb_scale,
+                    out_scale=self.config.mup_head_scale,
+                )
             elif isinstance(m, LayerNormParameterized):
                 m.reset_parameters()
 

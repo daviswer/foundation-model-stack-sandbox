@@ -277,8 +277,8 @@ class GatedLinearUnit(nn.Module):
                 getattr(self, layer).weight,
                 mean=0.0,
                 std=scale
-                / self.width**.5
-                / (self.hidden_dim / self.width) ** (1/6),
+                / self.width**0.5
+                / (self.hidden_dim / self.width) ** (1 / 6),
             )
             if self.use_bias:
                 getattr(self, layer).bias.data.zero_()
