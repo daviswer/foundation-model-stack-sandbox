@@ -57,10 +57,11 @@ class LLaMAConfig(ModelConfig):
     unfuse_strategy: Optional[str] = None  # TODO: could be an Enum
 
     # muP values
-    mup_emb_scale: float = 1
+    mup_emb_scale: float = 1/32
     mup_head_scale: float = 32
     mup_ffn_init: float = 1
     mup_attn_init: float = 1
+    mup_2d_lr: float = 32
 
 
 class LLaMABlock(nn.Module):
