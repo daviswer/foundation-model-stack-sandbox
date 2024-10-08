@@ -125,10 +125,16 @@ class UnfusedQKV(QKV):
             linear_config=linear_config,
         )
 
-    def reset_parameters(self):
+    def reset_parameters(self, scale=1):
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.trunc_normal_(m.weight, mean=0.0, std=0.02)
+                nn.init.trunc_normal_(
+                    m.weight, 
+                    mean=0.0, 
+                    std=1
+                    / self.emb_dim**.5
+                    / (self.nheads * self.emb_v_per_head / self.emb_dim) ** .25,
+                )
                 if self.use_bias:
                     m.bias.data.zero_()
 
@@ -214,8 +220,14 @@ class FusedQKV(QKV):
             result.value.bias = torch.nn.Parameter(value_bias)
         return result
 
-    def reset_parameters(self):
-        nn.init.trunc_normal_(self.qkv_fused.weight, mean=0.0, std=0.02)
+    def reset_parameters(self, scale=1):
+        nn.init.trunc_normal_(
+            self.qkv_fused.weight, 
+            mean=0.0, 
+            std=scale
+            / self.emb_dim**.5
+            / (self.nheads * self.emb_v_per_head / self.emb_dim) ** .25,
+        )
         if self.use_bias:
             self.qkv_fused.bias.data.zero_()
 
@@ -308,14 +320,16 @@ class MultiHeadAttention(nn.Module):
         )
         self.previous_math: bool = torch.backends.cuda.math_sdp_enabled()
 
-    def reset_parameters(self):
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.trunc_normal_(m.weight, mean=0.0, std=0.02)
-                if self.use_bias:
-                    m.bias.data.zero_()
-            elif isinstance(m, QKV):
-                m.reset_parameters()
+    def reset_parameters(self, scale=1):
+        nn.init.normal_(
+            self.dense.weight,
+            mean=0.0,
+            std=scale
+            / self.emb_dim**0.5
+            / (self.nheads * self.emb_v_per_head / self.emb_dim) ** 0.25,
+        )
+        if self.use_bias:
+            self.dense.bias.data.zero_()
 
     def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
         return TPMultiHeadAttention.import_module(self, group)
@@ -440,6 +454,7 @@ class MultiHeadAttention(nn.Module):
             attn_mask=attn_mask,
             dropout_p=self.p_dropout if self.training else 0.0,
             is_causal=is_causal_mask,
+            scale=1/self.emb_kq_per_head,
         )
 
         if attn_algorithm:

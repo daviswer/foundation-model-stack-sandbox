@@ -265,7 +265,7 @@ class GatedLinearUnit(nn.Module):
         self.linear_config = linear_config
         self.linear_type = get_linear_type(linear_config)
 
-    def reset_parameters(self):
+    def reset_parameters(self, scale=1):
         layers = ["w2"]
         if self.fused:
             layers.append("wg1_fused")
@@ -276,7 +276,9 @@ class GatedLinearUnit(nn.Module):
             nn.init.trunc_normal_(
                 getattr(self, layer).weight,
                 mean=0.0,
-                std=0.02,
+                std=scale
+                / self.width**.5
+                / (self.hidden_dim / self.width) ** (1/6),
             )
             if self.use_bias:
                 getattr(self, layer).bias.data.zero_()

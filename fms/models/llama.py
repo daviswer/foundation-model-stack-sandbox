@@ -13,7 +13,7 @@ from fms.distributed.strategy import (
     TensorParallelStrategy,
     UniformModelParallelStrategy,
 )
-from fms.modules.attention import MultiHeadAttention
+from fms.modules.attention import MultiHeadAttention, QKV
 from fms.modules.embedding import WordEmbedding
 from fms.modules.feedforward import GatedLinearUnit
 from fms.modules.layernorm import LayerNormParameterized
@@ -55,6 +55,12 @@ class LLaMAConfig(ModelConfig):
     rope_theta: float = 10_000.0
     linear_config: Optional[Mapping[str, Any]] = None
     unfuse_strategy: Optional[str] = None  # TODO: could be an Enum
+
+    # muP values
+    mup_emb_scale: float = 1
+    mup_head_scale: float = 32
+    mup_ffn_init: float = 1
+    mup_attn_init: float = 1
 
 
 class LLaMABlock(nn.Module):
@@ -254,47 +260,16 @@ class LLaMA(nn.Module):
     def reset_parameters(self):
         # Call reset_parameters for relevant sub-layers
         for m in self.modules():
-            if (
-                isinstance(m, MultiHeadAttention)
-                or isinstance(m, WordEmbedding)
-                or isinstance(m, GatedLinearUnit)
-                or isinstance(m, LayerNormParameterized)
-            ):
+            if isinstance(m, MultiHeadAttention):
+                m.reset_parameters(scale=self.config.mup_attn_init)
+            elif isinstance(m, GatedLinearUnit):
+                m.reset_parameters(scale=self.config.mup_ffn_init)
+            elif isinstance(m, QKV):
+                m.reset_parameters(scale=self.config.mup_ffn_init)
+            elif isinstance(m, WordEmbedding):
+                m.reset_parameters(in_scale=self.config.mup_emb_scale, out_scale=self.config.mup_head_scale)
+            elif isinstance(m, LayerNormParameterized):
                 m.reset_parameters()
-
-    def validate_reset_parameters(self):
-        # Verifies that the above self.reset_parameters() executed correctly.
-        # This may not always be the case for distributed settings with sharded tensors,
-        # such as FSDP or TP. Note that performing this check may require unsharding /
-        # re-materializing the full model on a single rank to access the underlying tensors.
-        tolerance = 1e-3
-
-        def check_close(x):
-            assert x.mean().abs() < tolerance
-            assert x.std().sub(0.02).abs() < tolerance
-
-        with torch.no_grad():
-            for p in self.parameters():
-                assert p.isnan().int().sum() == 0
-                assert p.isinf().int().sum() == 0
-            for m in self.modules():
-                if isinstance(LayerNormParameterized):
-                    if m.elementwise_scale:
-                        assert m.weight.sum() == m.weight.numel()
-                    if m.elementwise_shift:
-                        assert m.bias.add(1).sum() == m.bias.numel()
-                elif isinstance(WordEmbedding):
-                    check_close(m.emb.weight)
-                    check_close(m.head.weight)
-                elif isinstance(GatedLinearUnit):
-                    check_close(m.w1.weight)
-                    check_close(m.w2.weight)
-                    check_close(m.wg.weight)
-                elif isinstance(MultiHeadAttention):
-                    check_close(m.query.weight)
-                    check_close(m.key.weight)
-                    check_close(m.value.weight)
-                    check_close(m.dense.weight)
 
     def _clean_up_rot_emb_cache(
         self,

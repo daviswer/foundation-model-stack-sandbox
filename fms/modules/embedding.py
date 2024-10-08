@@ -65,6 +65,8 @@ class WordEmbedding(nn.Module):
         self.tie_weights = tie_weights
         self.bias = bias
         self.max_pos = max_pos
+        self.in_scale = 1
+        self.out_scale = 1
         assert (
             reversible or not tie_weights
         ), "Error: weights cannot be tied when there is no output head!"
@@ -82,7 +84,9 @@ class WordEmbedding(nn.Module):
             if tie_weights:
                 self.head.weight = self.emb.weight
 
-    def reset_parameters(self):
+    def reset_parameters(self, in_scale=1, out_scale=1):
+        self.in_scale = in_scale
+        self.out_scale = out_scale
         # Defaults to norm-preserving in reverse op, unit vector in forward op
         layers = ["emb"]
         if self.abs_pos:
@@ -90,7 +94,7 @@ class WordEmbedding(nn.Module):
         if self.reversible and not self.tie_weights:
             layers.append("head")
         for layer in layers:
-            nn.init.trunc_normal_(getattr(self, layer).weight, mean=0.0, std=0.02)
+            nn.init.trunc_normal_(getattr(self, layer).weight, mean=0.0, std=1)
         if self.reversible and self.bias:
             self.head.bias.data.zero_()
         # Preserve pad index dummy-hood
@@ -120,13 +124,13 @@ class WordEmbedding(nn.Module):
                     min=0
                 )  # In case of left-padding, prevent negative indices (get zeroed anyways)
                 out = out.addcmul(self.pos_emb(pos), ~is_pad.unsqueeze(-1))
-            return out
+            return out.mul(self.in_scale)
         else:
             if self.debug:
                 assert (
                     self.reversible
                 ), "Error: cannot make prediction when there is no output head!"
-            return self.head(inp)
+            return self.head(inp.mul(self.out_scale/self.emb_dim))
 
 
 class TPWordEmbedding(WordEmbedding, TPModule):

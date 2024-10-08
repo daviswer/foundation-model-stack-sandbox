@@ -52,7 +52,7 @@ class LayerNormParameterized(nn.Module):
 
     def reset_parameters(self):
         if self.elementwise_scale:
-            self.weight.data.fill_(1)
+            self.weight.data.zero_()
         if self.elementwise_shift:
             self.bias.data.zero_()
 
@@ -66,7 +66,7 @@ class LayerNormParameterized(nn.Module):
         xf = xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + self.eps)
         x = xf.type_as(x)
         if self.elementwise_scale:
-            x = self.weight * x
+            x = self.weight.add(1) * x
         if self.elementwise_shift:
             x = x + self.bias
         return x
