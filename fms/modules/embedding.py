@@ -129,13 +129,16 @@ class WordEmbedding(nn.Module):
                 )  # In case of left-padding, prevent negative indices (get zeroed anyways)
                 out = out.addcmul(self.pos_emb(pos), ~is_pad.unsqueeze(-1))
             out = out * (self.in_scale * self.emb_dim**0.5)
+            print(out.std())
             return out
         else:
             if self.debug:
                 assert (
                     self.reversible
                 ), "Error: cannot make prediction when there is no output head!"
+            print(inp.std())
             inp = inp * (self.out_scale / self.emb_dim**0.5)
+            print(inp.std())
             return self.head(inp)
 
 

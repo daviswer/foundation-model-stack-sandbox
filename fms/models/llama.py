@@ -59,7 +59,7 @@ class LLaMAConfig(ModelConfig):
     # muP values
     #   - Comments are: Left, our formula, Right, target
     #   - Values calculated based on TinyLlama
-    mup_emb_scale: float = 0.1414  # 1 * f^2  =  .02
+    mup_emb_scale: float = 0.02  # f  =  .02
     mup_head_scale: float = 32.0  # 1/sqrt(d) * f  =  1
     mup_ffn_init: float = 0.7575  # 1/sqrt(d) / 6rt(multiple_of_growf) * f  =  .02
     mup_attn_init: float = 0.640  # 1/sqrt(d) / 4rt(emb_v * nheads / d) * f  =  .02
