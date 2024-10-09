@@ -265,7 +265,7 @@ class GatedLinearUnit(nn.Module):
         self.linear_config = linear_config
         self.linear_type = get_linear_type(linear_config)
 
-    def reset_parameters(self):
+    def reset_parameters(self, scale=1):
         layers = ["w2"]
         if self.fused:
             layers.append("wg1_fused")
