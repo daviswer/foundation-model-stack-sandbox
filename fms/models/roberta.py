@@ -1,7 +1,7 @@
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional, OrderedDict
+from typing import Any, Mapping, Optional
 
 import torch
 import torch.nn as nn
@@ -269,13 +269,24 @@ class RoBERTa(nn.Module):
                 ),
             )
 
+    def post_init(self):
+        # This function is called in `get_model` after the model is fully initalized in the correct device
+
+        # if this model ties weights, so we tie here
+        if self.config.tie_heads:
+            # make sure you assign the non-meta weights to the meta parameter
+            if self.classification_head.head.weight.device == torch.device("meta"):
+                self.classification_head.head.weight = self.base_model.embedding.weight
+            else:
+                self.base_model.embedding.weight = self.classification_head.head.weight
+
 
 # a micro llama model to use with a char-level tokenizer
 _micro_char_config = RoBERTaConfig(
     emb_dim=192, nheads=4, nlayers=5, max_pos=1024, src_vocab_size=256
 )
 
-_base_config = RoBERTaConfig()
+_base_config = RoBERTaConfig(tie_heads=True, norm_eps=1e-5, p_dropout=0.1)
 
 _architecture_name = "roberta"
 

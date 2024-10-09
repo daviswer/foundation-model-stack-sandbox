@@ -1,6 +1,6 @@
 import math
 from dataclasses import dataclass
-from typing import List, Mapping, Optional, Tuple
+from typing import Any, List, Mapping, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -30,6 +30,10 @@ class GPTBigCodeConfig(ModelConfig):
     emb_dropout: float = 0.0
     multiquery_attn: bool = True
     ln_eps: float = 1e-5
+    linear_config: Optional[
+        Mapping[str, Any]
+    ] = None  # pass as {"linear_type": str, <other kwargs>}
+    unfuse_strategy: Optional[str] = None  # TODO: could be an Enum
 
 
 class GPTBigCodeBlock(nn.Module):
@@ -48,6 +52,8 @@ class GPTBigCodeBlock(nn.Module):
             kvheads=1 if self.config.multiquery_attn else self.config.nheads,
             p_dropout=self.config.p_dropout,
             use_bias=True,
+            fused=(self.config.unfuse_strategy != "pre"),
+            linear_config=self.config.linear_config,
         )
 
         self.ff_sub_layer = FeedForwardBlock(
@@ -56,6 +62,7 @@ class GPTBigCodeBlock(nn.Module):
             activation_fn=str_to_activation(self.config.activation_fn),
             p_dropout=self.config.p_dropout,
             use_bias=True,
+            linear_config=self.config.linear_config,
         )
 
         if self.config.p_dropout != 0:
@@ -311,13 +318,24 @@ class GPTBigCode(nn.Module):
                     std=self.config.emb_dim**-0.5,
                 )
 
+    def post_init(self):
+        # This function is called in `get_model` after the model is fully initalized in the correct device
+
+        # this model ties weights, so we tie here
+        # make sure you assign the non-meta weights to the meta parameters
+        if self.head.weight.device == torch.device("meta"):
+            self.head.weight = self.base_model.embedding.weight
+        else:
+            self.base_model.embedding.weight = self.head.weight
+
     def forward(
         self,
-        x: torch.LongTensor,
+        x: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value_states: Optional[Tuple[torch.FloatTensor,]] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        past_key_value_states: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
         use_cache: bool = False,
+        only_last_token: bool = False,
         attn_algorithm: Optional[str] = None,
     ):
         output, cache = self.base_model(
@@ -329,6 +347,8 @@ class GPTBigCode(nn.Module):
             attn_algorithm=attn_algorithm,
         )
 
+        if only_last_token:
+            output = output[:, -1, :]
         preds = self.head(output)
 
         if use_cache:
