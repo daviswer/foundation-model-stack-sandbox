@@ -84,7 +84,9 @@ class WordEmbedding(nn.Module):
             if tie_weights:
                 self.head.weight = self.emb.weight
 
-    def reset_parameters(self, emb_scale=1, head_scale=1):
+    def reset_parameters(self, scale=(1,1)):
+        emb_scale = scale[0]
+        head_scale = scale[1]
         self.in_scale = emb_scale
         self.out_scale = head_scale
         # Emb scaling

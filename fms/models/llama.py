@@ -273,8 +273,7 @@ class LLaMA(nn.Module):
                 m.reset_parameters(scale=self.config.mup_attn_init)
             elif isinstance(m, WordEmbedding):
                 m.reset_parameters(
-                    emb_scale = self.config.mup_emb_scale,
-                    head_scale = self.config.mup_head_scale,
+                    scale = (self.config.mup_emb_scale, self.config.mup_head_scale),
                 )
             elif isinstance(m, LayerNormParameterized):
                 m.reset_parameters()
