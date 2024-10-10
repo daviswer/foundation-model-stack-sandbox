@@ -85,10 +85,8 @@ class WordEmbedding(nn.Module):
                 self.head.weight = self.emb.weight
 
     def reset_parameters(self, scale=(1,1)):
-        emb_scale = scale[0]
-        head_scale = scale[1]
-        self.in_scale = emb_scale
-        self.out_scale = head_scale
+        self.in_scale = scale[0]
+        self.out_scale = scale[1]
         # Emb scaling
         nn.init.normal_(self.emb.weight, mean=0.0, std= 1 / self.emb_dim**0.5)
         # Pos emb scaling
