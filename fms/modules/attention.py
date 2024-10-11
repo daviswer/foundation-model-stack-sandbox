@@ -326,9 +326,9 @@ class MultiHeadAttention(nn.Module):
         nn.init.normal_(
             self.dense.weight,
             mean=0.0,
-            std=scale
+            std=1
             / self.emb_dim**0.5
-            / (self.nheads * self.emb_v_per_head / self.emb_dim) ** 0.25,
+            / (scale * self.nheads * self.emb_v_per_head / self.emb_dim) ** 0.25,
         )
         if self.use_bias:
             self.dense.bias.data.zero_()
