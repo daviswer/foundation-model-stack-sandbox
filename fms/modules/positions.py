@@ -231,6 +231,9 @@ class RotaryEmbedding(PositionEncoder):
             not always be the pre-cached position 0...S. For kv-caching without dynamic batching
             or variable per-row left padding position_ids is shared for all the batch.
         """
+
+        return q,k
+
         assert len(q.size()) == 4
         assert len(k.size()) == 4
 
