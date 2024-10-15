@@ -283,6 +283,7 @@ class LLaMA(nn.Module):
                 )
             elif isinstance(m, LayerNormParameterized):
                 m.reset_parameters()
+        print(self.config.mup_emb_scale, self.config.mup_head_scale)
 
     def _clean_up_rot_emb_cache(
         self,
