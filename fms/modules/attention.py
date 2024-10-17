@@ -131,7 +131,7 @@ class UnfusedQKV(QKV):
                 nn.init.normal_(
                     m.weight,
                     mean=0.0,
-                    std=scale
+                    std=scale**.5
                     / self.emb_dim**0.5
                     / (self.nheads * self.emb_v_per_head / self.emb_dim) ** 0.25,
                 )
@@ -224,7 +224,7 @@ class FusedQKV(QKV):
         nn.init.normal_(
             self.qkv_fused.weight,
             mean=0.0,
-            std=scale
+            std=scale**.5
             / self.emb_dim**0.5
             / (self.nheads * self.emb_v_per_head / self.emb_dim) ** 0.25,
         )
@@ -326,9 +326,9 @@ class MultiHeadAttention(nn.Module):
         nn.init.normal_(
             self.dense.weight,
             mean=0.0,
-            std=1
+            std=scale**.5
             / self.emb_dim**0.5
-            / (scale * self.nheads * self.emb_v_per_head / self.emb_dim) ** 0.25,
+            / (self.nheads * self.emb_v_per_head / self.emb_dim) ** 0.25,
         )
         if self.use_bias:
             self.dense.bias.data.zero_()
@@ -456,7 +456,7 @@ class MultiHeadAttention(nn.Module):
             attn_mask=attn_mask,
             dropout_p=self.p_dropout if self.training else 0.0,
             is_causal=is_causal_mask,
-            # scale=self.attn_scale / self.emb_kq_per_head,
+            scale=self.attn_scale / self.emb_kq_per_head,
         )
 
         if attn_algorithm:

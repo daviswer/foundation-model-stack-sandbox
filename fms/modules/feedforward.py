@@ -276,9 +276,9 @@ class GatedLinearUnit(nn.Module):
             nn.init.trunc_normal_(
                 getattr(self, layer).weight,
                 mean=0.0,
-                std=1
+                std=scale ** (1 / 3)
                 / (self.width**0.5)
-                / (scale * self.hidden_dim / self.width / 2) ** (1 / 6),
+                / (self.hidden_dim / self.width / 2) ** (1 / 6),
             )
             if self.use_bias:
                 getattr(self, layer).bias.data.zero_()
