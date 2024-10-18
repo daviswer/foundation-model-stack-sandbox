@@ -269,6 +269,7 @@ class LLaMA(nn.Module):
         return cls(config)
 
     def reset_parameters(self):
+        print("RESETTING")
         # Call reset_parameters for relevant sub-layers
         for m in self.modules():
             if isinstance(m, MultiHeadAttention):
