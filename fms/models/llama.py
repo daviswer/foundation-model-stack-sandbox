@@ -13,7 +13,7 @@ from fms.distributed.strategy import (
     TensorParallelStrategy,
     UniformModelParallelStrategy,
 )
-from fms.modules.attention import MultiHeadAttention
+from fms.modules.attention import QKV, MultiHeadAttention
 from fms.modules.embedding import WordEmbedding
 from fms.modules.feedforward import GatedLinearUnit
 from fms.modules.layernorm import LayerNormParameterized
@@ -56,6 +56,22 @@ class LLaMAConfig(ModelConfig):
     linear_config: Optional[Mapping[str, Any]] = None
     unfuse_strategy: Optional[str] = None  # TODO: could be an Enum
 
+    # muP values
+    #   - Comments are: Left, our formula, Right, target
+    #   - Values calculated based on TinyLlama (init=.02, d=1024, head_d=128, growf=8/3)
+    mup_head_scale: float = 32.0  # 1/sqrt(d) * f  =  1
+    mup_attn_temp: float = 11.314  # 1/d * f  =  1/sqrt(d)  (d is head dim here)
+    # mup_attn_gain: float = 0.4096  # f  =  (.02*sqrt(d))**2
+    # mup_ffn_gain: float = 0.3027  # f  =  (.02*sqrt(d)/sqrt(2)) * (.02*sqrt(d)) * (.02*sqrt(d*growf))
+    # residual_downscale = 0.35212  # sqrt(attn_gain * ffn_gain)
+    # attn_gain = downscale*sqrt(skew)
+    # ffn_gain = downscale/sqrt(skew)
+    mup_a_f_skew: float = 1.35316  # (attn_gain / ffn_gain)
+    # set residual_downscale to 1, adjust emb scale and dscale to compensate
+    mup_emb_scale: float = 0.0568  # f  =  .02 / residual_downscale
+    # 2d weights are scaled to .02 / residual_downscale. Adjust LR same (don't worry about LN LR)
+    mup_lr_dscale: float = 90.8781 # 1/sqrt(d) * f = 1 / residual_downscale
+
 
 class LLaMABlock(nn.Module):
     def __init__(self, config: LLaMAConfig, rotary_emb: RotaryEmbedding):
@@ -96,6 +112,7 @@ class LLaMABlock(nn.Module):
             p_dropout=self.config.p_dropout,
             use_bias=self.config.attn_bias,
             position_encoder=rotary_emb,
+            attn_scale=self.config.mup_attn_temp,
             fused=(self.config.unfuse_strategy != "pre"),
             linear_config=self.config.linear_config,
         )
@@ -254,47 +271,18 @@ class LLaMA(nn.Module):
     def reset_parameters(self):
         # Call reset_parameters for relevant sub-layers
         for m in self.modules():
-            if (
-                isinstance(m, MultiHeadAttention)
-                or isinstance(m, WordEmbedding)
-                or isinstance(m, GatedLinearUnit)
-                or isinstance(m, LayerNormParameterized)
-            ):
+            if isinstance(m, MultiHeadAttention):
+                m.reset_parameters(scale=self.config.mup_a_f_skew**.5)
+            elif isinstance(m, GatedLinearUnit):
+                m.reset_parameters(scale=self.config.mup_a_f_skew**-.5)
+            elif isinstance(m, QKV):
+                m.reset_parameters(scale=self.config.mup_a_f_skew**.5)
+            elif isinstance(m, WordEmbedding):
+                m.reset_parameters(
+                    scale = (self.config.mup_emb_scale, self.config.mup_head_scale),
+                )
+            elif isinstance(m, LayerNormParameterized):
                 m.reset_parameters()
-
-    def validate_reset_parameters(self):
-        # Verifies that the above self.reset_parameters() executed correctly.
-        # This may not always be the case for distributed settings with sharded tensors,
-        # such as FSDP or TP. Note that performing this check may require unsharding /
-        # re-materializing the full model on a single rank to access the underlying tensors.
-        tolerance = 1e-3
-
-        def check_close(x):
-            assert x.mean().abs() < tolerance
-            assert x.std().sub(0.02).abs() < tolerance
-
-        with torch.no_grad():
-            for p in self.parameters():
-                assert p.isnan().int().sum() == 0
-                assert p.isinf().int().sum() == 0
-            for m in self.modules():
-                if isinstance(LayerNormParameterized):
-                    if m.elementwise_scale:
-                        assert m.weight.sum() == m.weight.numel()
-                    if m.elementwise_shift:
-                        assert m.bias.add(1).sum() == m.bias.numel()
-                elif isinstance(WordEmbedding):
-                    check_close(m.emb.weight)
-                    check_close(m.head.weight)
-                elif isinstance(GatedLinearUnit):
-                    check_close(m.w1.weight)
-                    check_close(m.w2.weight)
-                    check_close(m.wg.weight)
-                elif isinstance(MultiHeadAttention):
-                    check_close(m.query.weight)
-                    check_close(m.key.weight)
-                    check_close(m.value.weight)
-                    check_close(m.dense.weight)
 
     def _clean_up_rot_emb_cache(
         self,
