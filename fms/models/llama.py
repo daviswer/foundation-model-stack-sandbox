@@ -66,7 +66,7 @@ class LLaMAConfig(ModelConfig):
     # residual_downscale = 0.35212  # sqrt(attn_gain * ffn_gain)
     # attn_gain = downscale*sqrt(skew)
     # ffn_gain = downscale/sqrt(skew)
-    mup_a_f_skew = 1.35316  # (attn_gain / ffn_gain)
+    mup_a_f_skew: float = 1.35316  # (attn_gain / ffn_gain)
     # set residual_downscale to 1, adjust emb scale and dscale to compensate
     mup_emb_scale: float = 0.0568  # f  =  .02 / residual_downscale
     # 2d weights are scaled to .02 / residual_downscale. Adjust LR same (don't worry about LN LR)
