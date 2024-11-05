@@ -156,6 +156,7 @@ model = LLaMA(c)
 # model.load_state_dict(d["model_state"]["_orig_mod"])
 
 d = torch.load(args.model_path)['model_state']
+d = {k[10:]:v for k,v in d.items()}
 # d = {k[10:]:q for k,q in d.items()}
 # for i in range(24):
 #     x = d.pop(f"layers.{i}.ff_sub_layer.wg1_fused.weight")
