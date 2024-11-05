@@ -144,6 +144,7 @@ c = LLaMAConfig(
     nlayers=24,
     hidden_grow_factor=3.5,
     max_expected_seq_len=4096,
+    rope_theta=500000.0,
 )
 model = LLaMA(c)
 # d = {"model_state": {"_orig_mod": model.state_dict()}}
