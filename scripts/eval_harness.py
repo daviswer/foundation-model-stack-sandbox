@@ -183,8 +183,6 @@ lm_obj = evaluation.FMSEvalHarnessLM(
     world_size=world_size,
 )
 
-lm_eval.tasks.initialize_tasks()
-
 results = lm_eval.simple_evaluate(
     model=lm_obj,
     tasks=args.tasks.split(","),

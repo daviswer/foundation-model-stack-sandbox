@@ -3,32 +3,58 @@ import os
 import re
 from collections import ChainMap
 from collections.abc import Iterable
+from functools import reduce
 from pathlib import Path
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    List,
-    Mapping,
-    MutableMapping,
-    Optional,
-    Set,
-    Tuple,
-    Union,
-)
+from typing import Any, Callable, Mapping, MutableMapping, Optional, Set, Union
 
 import torch
 
 from fms.modules.tp import TPModule
 
 
-__adapters: MutableMapping[str, MutableMapping[str, Callable[[Mapping], Mapping]]] = {}
+__adapters: MutableMapping[
+    str, MutableMapping[str, Callable[[Mapping[str, Any]], Mapping[str, Any]]]
+] = {}
+__adapter_steps: MutableMapping[
+    str, MutableMapping[str, Callable[[Mapping[str, Any]], Mapping[str, Any]]]
+] = {}
+
+
+def register_adapter_step(
+    architecture: str,
+    adapter_name: str,
+    adapter_step: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+):
+    """
+    Registers a state dict adapter step to be available to the (de) serialization
+    API.
+
+    Args:
+    architecture: The name of the model architecture, e.g. 'llama'
+    adapter_name: A name to identiy the step for the checkpoint and model
+    adapter_step: the class of the adapter. The class must accept two constructor
+        parameters, which will be a state dict (`OrderedDict`), and a collection
+        of supported kwargs (such as model_config, etc.)
+    """
+    adapter_steps: MutableMapping[
+        str, Callable[[Mapping[str, Any]], Mapping[str, Any]]
+    ] = {}
+    if architecture in __adapter_steps:
+        adapter_steps = __adapter_steps[architecture]
+
+    if adapter_name in adapter_steps:
+        raise KeyError(
+            f"Adapter step {adapter_name} already registered for architecture {architecture}"
+        )
+
+    adapter_steps[adapter_name] = adapter_step
+    __adapter_steps[architecture] = adapter_steps
 
 
 def register_adapter(
     architecture: str,
     source: str,
-    adapter: Callable[[Mapping], Mapping],
+    adapter_steps: list[str],
 ):
     """
     Registers a state dict adapter to be available to the (de) serialization
@@ -38,19 +64,36 @@ def register_adapter(
     architecture: The name of the model architecture, e.g. 'llama'
     source: A label representing the format of the weights to be converted.
             E.g. 'hf'
-    adapter: the class of the adapter. The class must accept one constructor
-                parameter, which will be a state dict (`OrderedDict`)
+    adapter_steps: a list of registered steps to build the basic adapter for an
+            architecture and source combination. This can be augmented with extra
+            steps if needed during call to _get_adapter()
     """
-    sources: MutableMapping[str, Callable[[Mapping], Mapping]] = {}
+    sources: MutableMapping[str, Callable[[Mapping[str, Any]], Mapping[str, Any]]] = {}
     if architecture in __adapters:
         sources = __adapters[architecture]
 
     if source in sources:
         raise KeyError(
-            f"Variant {source} already registered for architecture {architecture}"
+            f"Source {source} already registered for architecture {architecture}"
         )
 
-    sources[source] = adapter
+    # Create a new base adapter for this source
+    step_functions = [__adapter_steps[architecture][step] for step in adapter_steps]
+
+    def adapter_fn(initial_sd: Mapping[str, Any], **extra_kwargs) -> Mapping[str, Any]:
+        def reduce_fn(
+            state_dict: Mapping[str, Any],
+            step_func: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+        ) -> Mapping[str, Any]:
+            return step_func(state_dict, **extra_kwargs)
+
+        return reduce(
+            reduce_fn,
+            step_functions,
+            initial_sd,
+        )
+
+    sources[source] = adapter_fn
     __adapters[architecture] = sources
 
 
@@ -67,11 +110,28 @@ def list_sources(architecture: str):
     return list(__adapters[architecture].keys())
 
 
-def _legacy_attn_unfused_to_fused_adapter(orig_sd):
+def _pre006_attn_adapter_step(
+    orig_sd: Mapping[str, Any], **kwargs
+) -> Mapping[str, Any]:
     """
-    Legacy adapter for converting pre 0.0.6 unfused attn weights to fused attn weights
+    Legacy adapter step for converting pre 0.0.6 unfused attn weights to fused attn weights
     """
-    new_sd = {}
+    return _attn_unfused_to_fused(orig_sd, attn_prefix="attn")
+
+
+def _attn_unfused_to_fused_step(
+    orig_sd: Mapping[str, Any], **kwargs
+) -> Mapping[str, Any]:
+    """
+    Adapter step for converting unfused attn weights to fused attn weights
+    """
+    return _attn_unfused_to_fused(orig_sd, attn_prefix="attn.in_proj")
+
+
+def _attn_unfused_to_fused(
+    orig_sd: Mapping[str, Any], attn_prefix: str
+) -> Mapping[str, Any]:
+    mutable_sd = dict(orig_sd)
     removed_params = set()
     orig_keys = set(orig_sd.keys())
     for name in orig_keys:
@@ -79,46 +139,50 @@ def _legacy_attn_unfused_to_fused_adapter(orig_sd):
         if name in removed_params:
             continue
 
-        if "attn.query" in name or "attn.key" in name or "attn.value" in name:
+        if (
+            f"{attn_prefix}.query" in name
+            or f"{attn_prefix}.key" in name
+            or f"{attn_prefix}.value" in name
+        ):
             # weight_type denotes weight or bias
             weight_type = name.split(".")[-1]
 
             unfused_weights = [
                 re.sub(
-                    rf"attn.(query|key|value).{weight_type}",
-                    f"attn.query.{weight_type}",
+                    rf"{attn_prefix}.(query|key|value).{weight_type}",
+                    f"{attn_prefix}.query.{weight_type}",
                     name,
                 ),
                 re.sub(
-                    rf"attn.(query|key|value).{weight_type}",
-                    f"attn.key.{weight_type}",
+                    rf"{attn_prefix}.(query|key|value).{weight_type}",
+                    f"{attn_prefix}.key.{weight_type}",
                     name,
                 ),
                 re.sub(
-                    rf"attn.(query|key|value).{weight_type}",
-                    f"attn.value.{weight_type}",
+                    rf"{attn_prefix}.(query|key|value).{weight_type}",
+                    f"{attn_prefix}.value.{weight_type}",
                     name,
                 ),
             ]
             removed_params.update(unfused_weights)
             new_name = re.sub(
-                rf"attn.(query|key|value).{weight_type}",
+                rf"{attn_prefix}.(query|key|value).{weight_type}",
                 f"attn.in_proj.qkv_fused.{weight_type}",
                 name,
             )
-            new_sd[new_name] = torch.cat(
-                [orig_sd.pop(w) for w in unfused_weights], dim=0
+            mutable_sd[new_name] = torch.cat(
+                [mutable_sd.pop(w) for w in unfused_weights], dim=0
             )
-        else:
-            new_sd[name] = orig_sd.pop(name)
-    return new_sd
+    return mutable_sd
 
 
-def _legacy_mlp_glu_unfused_to_fused_adapter(orig_sd):
+def _mlp_glu_unfused_to_fused_adapter_step(
+    orig_sd: Mapping[str, Any], **kwargs
+) -> Mapping[str, Any]:
     """
-    Legacy adapter for converting pre 0.0.6 unfused mlp glu weights to fused mlp glu weights
+    Adapter step for converting unfused mlp glu weights to fused mlp glu weights
     """
-    new_sd = {}
+    mutable_sd = dict(orig_sd)
     removed_params = set()
     orig_keys = set(orig_sd.keys())
     for name in orig_keys:
@@ -149,12 +213,10 @@ def _legacy_mlp_glu_unfused_to_fused_adapter(orig_sd):
                 f"ff_sub_layer.wg1_fused.{weight_type}",
                 name,
             )
-            new_sd[new_name] = torch.cat(
-                [orig_sd.pop(w) for w in unfused_weights], dim=0
+            mutable_sd[new_name] = torch.cat(
+                [mutable_sd.pop(w) for w in unfused_weights], dim=0
             )
-        else:
-            new_sd[name] = orig_sd.pop(name)
-    return new_sd
+    return mutable_sd
 
 
 def _get_adapter(
@@ -168,13 +230,19 @@ def _get_adapter(
         # if no adapter is registered, assume the attributes are already in
         # fms format.
         # should we raise an error here instead?
-        return lambda x: x
+        def id_fn(state_dict: Mapping[str, Any], **kwargs) -> Mapping[str, Any]:
+            return state_dict
+
+        return id_fn
     else:
         return __adapters[architecture][source]
 
 
 def get_adapted(
-    architecture: str, source: Optional[str], state_dict: Mapping[str, Any]
+    architecture: str,
+    source: Optional[str],
+    state_dict: Mapping[str, Any],
+    adapter_kwargs: Mapping[str, Any],
 ) -> Mapping[str, Any]:
     """
     Convert a state dict to FMS format, using an adapter specified by name.
@@ -189,7 +257,7 @@ def get_adapted(
     if not len(state_dict):
         return state_dict
     adapter = _get_adapter(architecture, source)
-    adapted = adapter(state_dict)
+    adapted = adapter(state_dict, **adapter_kwargs)
     return adapted
 
 
@@ -277,7 +345,7 @@ def load_state_dict(
         elif source == "meta":
             glob_pattern_list = ["*.pth", "*.safetensors"]
         elif source == "hf":
-            glob_pattern_list = ["*.bin", "*.safetensors"]
+            glob_pattern_list = ["*.bin", "*.safetensors", "*.pt"]
         else:
             glob_pattern_list = ["*.safetensors", "*.pth", "*.bin"]
         for glob_pattern_possibility in glob_pattern_list:
@@ -372,9 +440,11 @@ def load_state_dict_into_model(
     state_dict: MutableMapping[str, Any],
     architecture: str,
     source: str,
+    dtype: Optional[torch.dtype] = None,
     distributed_strategy: Optional[str] = None,
     checkpoint_sharding: Optional[str] = None,
     initial_device: torch.device = torch.device("cpu"),
+    rank: int = 0,
 ) -> None:
     """
     This function loads state_dict into model in the most efficient way possible,
@@ -390,6 +460,8 @@ def load_state_dict_into_model(
     source: If the weights in the state dict didn't come from an FMS model,
             `source` specifies which conversion function might be needed.
             See `serialization.list_sources(architecture)`
+    dtype: If None, cast to state dict parameter data type when copying it
+            into the model
     distributed_strategy: the kind of possibly-distributed model in which we
             intend to load these weights. E.g. tp, fsdp, None. Used for weight
             sharding.
@@ -401,11 +473,17 @@ def load_state_dict_into_model(
     # 1. Get the adapter from checkpoint sd to fms sd
     adapter = _get_adapter(architecture, source)
 
+    # Prepare the extra_kwargs for the adapter
+    adapter_kwargs = {}
+    if hasattr(model, "config"):
+        adapter_kwargs["model_config"] = model.config
+
     # 2. Decide if model needs sharding and how (for now only TP)
     needs_tp_sharding = checkpoint_sharding != "tp" and distributed_strategy == "tp"
 
     # 3. Iterate over the weights and load them into the model
     used_keys = set()
+    unused_keys = set()
     sd_keys = set(state_dict.keys())
 
     with torch.no_grad():
@@ -425,8 +503,14 @@ def load_state_dict_into_model(
             for psd_key in partial_sd.keys():
                 if partial_sd[psd_key].device != initial_device:
                     partial_sd[psd_key] = partial_sd[psd_key].to(device=initial_device)
-            fms_partial_sd = adapter(partial_sd)
-            _load_partial_state_dict(model, fms_partial_sd, needs_tp_sharding)
+            fms_partial_sd = adapter(partial_sd, **adapter_kwargs)
+            unused_keys_partial = _load_partial_state_dict(
+                model=model,
+                state_dict=fms_partial_sd,
+                needs_tp_sharding=needs_tp_sharding,
+                dtype=dtype,
+            )
+            unused_keys.update(unused_keys_partial)
             # Be aggressive in removing weights to save as much memory as possible
             for p_key in partial_sd.keys():
                 if isinstance(state_dict, ChainMap):
@@ -437,17 +521,43 @@ def load_state_dict_into_model(
             del partial_sd
             del fms_partial_sd
 
+    if unused_keys and rank == 0:
+        # TODO: start using logger?
+        print(
+            f"[WARNING] Keys from checkpoint (adapted to FMS) "
+            f"not copied into model: {unused_keys}"
+        )
+
 
 def _copy_if_present(parameter, tensor_value):
     parameter.copy_(tensor_value, non_blocking=True)
 
 
+def _move_to_real_device(
+    param: torch.Tensor,
+    real_device: torch.device,
+    dtype: Optional[torch.dtype] = None,
+) -> torch.Tensor:
+    if param.device == torch.device("meta"):
+        is_parameter = isinstance(param, torch.nn.Parameter)
+        param = torch.empty_like(
+            param,
+            device=real_device,
+            dtype=dtype,
+        )
+        if is_parameter:
+            param = torch.nn.Parameter(param)
+    return param
+
+
 def _load_partial_state_dict(
     model: torch.nn.Module,
-    state_dict,
+    state_dict: Mapping[str, Any],
     needs_tp_sharding: bool,
-):
-    unused_params = []
+    dtype: Optional[torch.dtype] = None,
+) -> set:
+    unused_keys = set()
+    unused_keys_tp = None
     seen_tp_modules = set()
     for key, tensor_value in state_dict.items():
         target_module = model
@@ -457,6 +567,7 @@ def _load_partial_state_dict(
         key_step = 0
         tp_module = None
         tp_prefix = ""
+
         # Navigate the model tree to find the module where the parameter is
         # located and whether there is a TPModule in the way in case the
         # parameter requires sharding
@@ -475,7 +586,7 @@ def _load_partial_state_dict(
                     tp_module = target_module
                     tp_prefix = prefix
             except AttributeError:
-                unused_params.append(key)
+                unused_keys.add(key)
                 break
 
         # Check if target_module has the Parameter/buffer
@@ -484,10 +595,46 @@ def _load_partial_state_dict(
             # into the model
             if not needs_tp_sharding or tp_module is None:
                 param = getattr(target_module, key_steps[-1])
+
+                # cast module parameter to non-meta device
+                if param.device == torch.device("meta"):
+                    param = _move_to_real_device(
+                        param=param,
+                        real_device=tensor_value.device,
+                        dtype=tensor_value.dtype if dtype is None else dtype,
+                    )
+                    setattr(target_module, key_steps[-1], param)
+                    param = getattr(target_module, key_steps[-1])
                 param.copy_(tensor_value, non_blocking=True)
+
             elif tp_module is not None and tp_module not in seen_tp_modules:
                 seen_tp_modules.add(tp_module)
                 tensor_values = {k: v for k, v in state_dict.items() if tp_prefix in k}
-                tp_module.load_weights(tensor_values)
-        except AttributeError:
-            unused_params.append(key)
+
+                # when tensors from ckpt have all the same dtype,
+                # it can be enforced onto the module parameters
+                is_single_dtype = (
+                    len(set([v.dtype for v in tensor_values.values()])) == 1
+                )
+
+                tp_module._apply(
+                    lambda t: _move_to_real_device(
+                        param=t,
+                        real_device=tensor_value.device,
+                        dtype=(
+                            dtype
+                            if dtype is not None
+                            else tensor_value.dtype
+                            if is_single_dtype
+                            else t.dtype
+                        ),
+                    )
+                )
+                unused_keys_tp = tp_module.load_weights(tensor_values)
+        except:
+            if unused_keys_tp:
+                unused_keys.update(unused_keys_tp)
+            else:
+                unused_keys.add(key)
+
+    return unused_keys
