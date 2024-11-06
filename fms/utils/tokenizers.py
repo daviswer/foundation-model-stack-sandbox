@@ -184,20 +184,20 @@ class BigramTokenizer(BaseTokenizer):
             else:
                 out.append(i)
         out = torch.LongTensor(out, device=d)
-        return super().convert_ids_to_tokens(out)
+        return self.tokenizer.convert_ids_to_tokens(out)
     
     def convert_tokens_to_ids(self, tokens: str | List[str]):
         if isinstance(tokens, str):
-            return super().convert_tokens_to_ids(tokens)
+            return self.tokenizer.convert_tokens_to_ids(tokens)
         else:
-            test = super().convert_tokens_to_ids(tokens)
+            test = self.tokenizer.convert_tokens_to_ids(tokens)
             return self._retokenize(test)
     
     def convert_tokens_to_string(self, tokens: List[str]):
-        return super().convert_tokens_to_string(tokens)
+        return self.tokenizer.convert_tokens_to_string(tokens)
     
     def vocab_size(self) -> int:
-        return super().vocab_size() + len(self.bigramd)
+        return self.tokenizer.vocab_size() + len(self.bigramd)
 
 
 def get_tokenizer(name: str, style: Optional[str] = None) -> BaseTokenizer:
