@@ -141,6 +141,63 @@ class _HFTokenizer(BaseTokenizer):
 
     def vocab_size(self):
         return self.tokenizer.get_vocab_size()
+    
+class BigramTokenizer(BaseTokenizer):
+    """
+    An adapter adding bigram level tokenization over a HuggingFace tokenizer.
+    """
+
+    def __init__(self, t:_HFTokenizer):
+        self.tokenizer = t
+        super().__init__(self.tokenizer.bos_token_id, self.tokenizer.eos_token_id)
+        self.bigramd = torch.load("/gpfs/daviswer/bigramd.pth")
+        self.vinvb = {v:k for k,v in self.bigramd.items()}
+
+    def _retokenize(self, test: List):
+        i = 0
+        out = []
+        while i < len(test):
+            if i == len(test) - 1:
+                out.append(test[-1])
+                i += 1
+            else:
+                pair = (test[i],test[i+1])
+                if pair in self.bigramd:
+                    out.append(self.bigramd[pair])
+                    i += 2
+                else:
+                    out.append(test[i])
+                    i += 1
+        return out
+
+    def tokenize(self, text: str):
+        test = self.tokenizer.tokenize(text)
+        return self._retokenize(test)
+    
+    def convert_ids_to_tokens(self, ids: torch.LongTensor):
+        d = ids.device
+        ids = ids.tolist()
+        out = []
+        for i in ids:
+            if i in self.vinvb:
+                out.append(list(self.vinvb[i]))
+            else:
+                out.append(i)
+        out = torch.LongTensor(out, device=d)
+        return super().convert_ids_to_tokens(out)
+    
+    def convert_tokens_to_ids(self, tokens: str | List[str]):
+        if isinstance(tokens, str):
+            return super().convert_tokens_to_ids(tokens)
+        else:
+            test = super().convert_tokens_to_ids(tokens)
+            return self._retokenize(test)
+    
+    def convert_tokens_to_string(self, tokens: List[str]):
+        return super().convert_tokens_to_string(tokens)
+    
+    def vocab_size(self) -> int:
+        return super().vocab_size() + len(self.bigramd)
 
 
 def get_tokenizer(name: str, style: Optional[str] = None) -> BaseTokenizer:
