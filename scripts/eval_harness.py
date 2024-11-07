@@ -137,7 +137,7 @@ else:
 #     # hidden_grow_factor=3
 # )
 c = LLaMAConfig(
-    src_vocab_size=144640,
+    src_vocab_size=161024,
     emb_dim=2048,
     nheads=16,
     kvheads=8,
