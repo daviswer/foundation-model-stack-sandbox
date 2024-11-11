@@ -17,7 +17,7 @@ from fms.distributed.strategy import (
     TensorParallelStrategy,
     UniformModelParallelStrategy,
 )
-from fms.modules.attention import MultiHeadAttention
+from fms.modules.attention import MultiHeadAttention, TelescopingAttention
 from fms.modules.embedding import WordEmbedding
 from fms.modules.feedforward import GatedLinearUnit
 from fms.modules.layernorm import LayerNormParameterized
@@ -53,10 +53,11 @@ class LLaMAConfig(ModelConfig):
     attn_bias: bool = False
     mlp_bias: bool = False
     tie_heads: bool = False
+    rope_ratio: int = 10000
 
 
 class LLaMABlock(nn.Module):
-    def __init__(self, config: LLaMAConfig, rotary_emb: RotaryEmbedding):
+    def __init__(self, config: LLaMAConfig, rotary_emb: RotaryEmbedding, attn = None):
         super(LLaMABlock, self).__init__()
         self.config = config
         emb_kq = self.config.emb_dim // self.config.nheads
@@ -85,7 +86,7 @@ class LLaMABlock(nn.Module):
             kvheads = self.config.kvheads
             assert self.config.nheads % self.config.kvheads == 0
 
-        self.attn = MultiHeadAttention(
+        self.attn = attn(
             self.config.emb_dim,
             emb_kq,
             emb_v,
@@ -195,6 +196,7 @@ class LLaMA(nn.Module):
             dim=self.config.emb_dim // self.config.nheads,
             ntk_scaling=self.config.ntk_scaling,
             max_seq_len=self.config.max_expected_seq_len,
+            ratio=self.config.rope_ratio,
         )
         # RoPE init
         if isinstance(self.distributed_strategy, UniformModelParallelStrategy):
@@ -209,7 +211,7 @@ class LLaMA(nn.Module):
 
         layers = []
         for i in range(self.config.nlayers):
-            block: nn.Module = LLaMABlock(self.config, self.rot_emb)
+            block: nn.Module = LLaMABlock(self.config, self.rot_emb, MultiHeadAttention if i%6==0 else TelescopingAttention)
             block = self.distributed_strategy.distribute_layer(block, i)
             layers.append(block)
         self.layers = nn.ModuleList(layers)
@@ -241,6 +243,7 @@ class LLaMA(nn.Module):
         for m in self.modules():
             if (
                 isinstance(m, MultiHeadAttention)
+                or isinstance(m, TelescopingAttention)
                 or isinstance(m, WordEmbedding)
                 or isinstance(m, GatedLinearUnit)
                 or isinstance(m, LayerNormParameterized)
@@ -378,6 +381,16 @@ _micro_char_config = LLaMAConfig(
 
 _7b_config = LLaMAConfig()
 _13b_config = LLaMAConfig(emb_dim=5120, nheads=40, nlayers=40)
+_8b_config = LLaMAConfig(
+    src_vocab_size=128256,
+    emb_dim=4096,
+    nheads=32,
+    kvheads=8,
+    nlayers=32,
+    hidden_grow_factor=3.5,
+    max_expected_seq_len=8192,
+    rope_ratio=500_000,
+)
 # todo: add 35B config
 
 _70b_config = LLaMAConfig(
@@ -403,6 +416,7 @@ models.register_model(
     _architecture_name, "micro", _llama_factory_factory(_micro_char_config)
 )
 models.register_model(_architecture_name, "7b", _llama_factory_factory(_7b_config))
+models.register_model(_architecture_name, "llama3_8b", _llama_factory_factory(_8b_config))
 models.register_model(_architecture_name, "13b", _llama_factory_factory(_13b_config))
 models.register_model(_architecture_name, "70b", _llama_factory_factory(_70b_config))
 
