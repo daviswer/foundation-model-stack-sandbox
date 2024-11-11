@@ -136,7 +136,7 @@ c = LLaMAConfig(
     nlayers=24,
     nheads=24,
     kvheads=8,
-    emb_dim=2048,
+    emb_dim=3072,
     hidden_grow_factor=8/3,
     max_expected_seq_len=4096,
 )
