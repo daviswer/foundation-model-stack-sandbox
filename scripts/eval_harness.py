@@ -138,31 +138,31 @@ else:
 # )
 c = LLaMAConfig(
     src_vocab_size=128256,
-    emb_dim=2048,
-    nheads=16,
+    emb_dim=3072,
+    nheads=24,
     kvheads=8,
     nlayers=24,
-    hidden_grow_factor=3.5,
+    hidden_grow_factor=8/3,
     max_expected_seq_len=4096,
-    rope_theta=500000.0,
+    rope_theta=10000.0,
 )
 model = LLaMA(c)
-# d = {"model_state": {"_orig_mod": model.state_dict()}}
-# load_state_dict(
-#     state_dict=d, 
-#     storage_reader=FileSystemReader(args.model_path), 
-#     no_dist=True
-# )
-# model.load_state_dict(d["model_state"]["_orig_mod"])
+d = {"model_state": {"_orig_mod": model.state_dict()}}
+load_state_dict(
+    state_dict=d, 
+    storage_reader=FileSystemReader(args.model_path), 
+    no_dist=True
+)
+model.load_state_dict(d["model_state"]["_orig_mod"])
 
-d = torch.load(args.model_path)['model_state']
-d = {k[10:]:v for k,v in d.items()}
-# d = {k[10:]:q for k,q in d.items()}
-# for i in range(24):
-#     x = d.pop(f"layers.{i}.ff_sub_layer.wg1_fused.weight")
-#     d[f"layers.{i}.ff_sub_layer.wg.weight"] = x[:x.size(0)//2]
-#     d[f"layers.{i}.ff_sub_layer.w1.weight"] = x[x.size(0)//2:]
-model.load_state_dict(d)
+# d = torch.load(args.model_path)['model_state']
+# d = {k[10:]:v for k,v in d.items()}
+# # d = {k[10:]:q for k,q in d.items()}
+# # for i in range(24):
+# #     x = d.pop(f"layers.{i}.ff_sub_layer.wg1_fused.weight")
+# #     d[f"layers.{i}.ff_sub_layer.wg.weight"] = x[:x.size(0)//2]
+# #     d[f"layers.{i}.ff_sub_layer.w1.weight"] = x[x.size(0)//2:]
+# model.load_state_dict(d)
 
 model = model.to(device)
 tokenizer = tokenizers.get_tokenizer(args.tokenizer)
