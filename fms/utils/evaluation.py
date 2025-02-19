@@ -46,7 +46,8 @@ class FMSEvalHarnessLM(LM):
         input_ids = torch.tensor(
             input_ids, dtype=torch.long, device=self.device
         ).unsqueeze(0)
-        logits = F.log_softmax(self.wrapped_model(input_ids)[0], -1)
+        output = self.wrapped_model(input_ids, use_cache=False, past_key_values=None).logits
+        logits = F.log_softmax(output[0], -1)
         continuation_probs = logits[len(context_ids) - 1 :]
         loglikelihood = torch.gather(
             continuation_probs, 1, torch.tensor(continuation_ids).unsqueeze(1)
