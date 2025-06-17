@@ -130,6 +130,19 @@ class RopeNoScalingImpl:
         return freqs
 
 
+class UnRopeScalingImpl(RopeNoScalingImpl):
+    def compute_scaled_freqs(self, device: str, alpha: int):
+        ratio = self.ratio
+        dim = self.dim
+
+        logstart = math.log(2*math.pi / ratio)  # 1 cycle in ratio steps
+        logend = math.log(4*math.pi / 4096)  # 2 cycles in 4k steps
+        pos = torch.arange(0, dim//2, device=device) / (dim//2-1)
+        logfreq = pos*(logend-logstart) + logstart
+        freqs = logfreq.exp()
+        return freqs
+
+
 class RopeNtkScalingImpl(RopeNoScalingImpl):
     # NTK scaling.
     # https://arxiv.org/abs/2306.15595
