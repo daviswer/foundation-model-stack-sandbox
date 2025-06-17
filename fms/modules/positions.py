@@ -211,6 +211,7 @@ _rope_scale_mapping = {
     "llama3": RopeLlama3ScalingImpl,
     "ntk": RopeNtkScalingImpl,
     "regular": RopeNoScalingImpl,
+    "unrope": UnRopeScalingImpl,
 }
 
 
