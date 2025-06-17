@@ -55,6 +55,7 @@ class LLaMAConfig(ModelConfig):
     tie_heads: bool = False
     rope_theta: float = 10_000.0
     rope_scaling: dict = field(default_factory=lambda: {})
+    rope_partial: float = 1.0
     linear_config: Optional[Mapping[str, Any]] = None
     fused_weights: bool = True
 
@@ -211,6 +212,7 @@ class LLaMA(nn.Module):
             scaling=self.config.rope_scaling,
             max_seq_len=self.config.max_expected_seq_len,
             ratio=self.config.rope_theta,
+            partial_rope=self.config.rope_partial,
         )
         # RoPE init
         for device in set(
