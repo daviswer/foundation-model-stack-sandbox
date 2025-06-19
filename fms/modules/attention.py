@@ -1,5 +1,6 @@
 import abc
 import functools
+import math
 from typing import (
     Any,
     Callable,
@@ -32,12 +33,130 @@ from fms.modules.linear import (
 from fms.modules.positions import PositionEncoder
 from fms.modules.tp import TPModule
 
-__sdpa_previous_flash: bool = torch.backends.cuda.flash_sdp_enabled()
-__sdpa_previous_mem_efficient: bool = torch.backends.cuda.mem_efficient_sdp_enabled()
-__sdpa_previous_math: bool = torch.backends.cuda.math_sdp_enabled()
+from torch.autograd import Function
+
+class UniversalAttention(Function):
+    @staticmethod
+    def forward(kc, vc, xq, static_src, static_dest):
+        b,h,r,l,d = xq.shape
+        _,_,n,c,_ = kc.shape
+        mask = torch.ones(c,l, dtype=torch.bool, device=xq.device)
+        out = torch.empty(b,h,r,l,d,n, dtype=xq.dtype, device=xq.device)
+        denom = torch.empty(b,h,r,l,n, dtype=xq.dtype, device=xq.device)
+        affs = torch.empty(b,h,l, dtype=torch.float, device=xq.device)
+        static_src = static_src.pow(1/3)
+        static_dest = static_dest.pow(1/3)
+        kt = kc.view(b,h,l,d).transpose(-2,-1)  # b h d l
+        for i in range(n):
+            k_ = kc[:,:,i]  # b h c d
+            v_ = vc[:,:,i]  # b h c d
+            static_src_ = static_src[:,:,i]  # b h c
+
+            # Calculate decay matrix
+            affinity = k_.matmul(kt).relu().pow(2/3).float()  # deltanet style decay
+            affinity = affinity * static_src_.unsqueeze(-1) * static_dest.unsqueeze(-2)  # incorporate mamba-style and per-token decay
+            affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())  # b h c l
+            affinity = affinity.triu(i*c+1).cumsum(3)  # Accumulate decay with causal masking
+            affinity = affinity.masked_fill(mask.tril(i*c-1), -1e12)  # Re-mask, with 1s on diagonal
+
+            # Perform actual attention operation
+            score = k_.unsqueeze(2).matmul(xq.transpose(-1,-2)).add(affinity.unsqueeze(2))  # b h r c l
+            denom_ = score.logsumexp(dim=-2)  # b h r l
+            out_ = score.transpose(-1,-2).softmax(dim=-1).to(dtype=xq.dtype).matmul(v_.unsqueeze(2))  # b h r l d
+
+            out[...,i] = out_
+            denom[...,i] = denom_
+            affs[...,i*c:(i+1)*c] = affinity[...,-1]
+        return out, denom, affs
+
+    @staticmethod
+    def setup_context(ctx, inputs, outputs):
+        kc,vc,xq,ss,sd = inputs
+        # out,denom = outputs
+        ctx.save_for_backward(kc,vc,xq,ss,sd)
+
+    @staticmethod
+    def setup_context(ctx, inputs, outputs):
+        kc,vc,xq,ss,sd = inputs
+        # out,denom = outputs
+        ctx.save_for_backward(kc,vc,xq,ss,sd)
+
+    @staticmethod
+    def backward(ctx, g_out, g_denom, g_affs):
+        # Note: when using mixed precision, g_out is downcast but g_denom is always fp32
+        kc,vc,xq,static_src,static_dest = ctx.saved_tensors
+        dkc,dvc,dxq,dstat_src,dstat_dest = [torch.zeros_like(x) for x in [kc,vc,xq,static_src,static_dest]]
+        b,h,r,l,d = xq.shape
+        _,_,n,c,_ = kc.shape
+        mask = torch.ones(c,l, dtype=torch.bool, device=xq.device)
+        static_src = static_src.pow(1/3)
+        static_dest = static_dest.pow(1/3)
+        kt = kc.view(b,h,l,d).transpose(-2,-1)  # b h d l
+
+        for i in range(n):
+            k_ = kc[:,:,i]  # b h c d
+            v_ = vc[:,:,i]  # b h c d
+            static_src_ = static_src[:,:,i]  # b h c
+            dout_ = g_out[...,i]
+            ddenom_ = g_denom[...,i]
+
+            # Rerun forward pass
+            aff1 = k_.matmul(kt)
+            aff2 = aff1.relu().pow(2/3).float()
+            aff3 = aff2 * static_src_.unsqueeze(-1) * static_dest.unsqueeze(-2)
+            score = torch.log1p(aff3.clamp(min=0,max=1-1e-6).neg()).triu(i*c+1).cumsum(3).masked_fill(mask.tril(i*c-1), -1e12)
+            score = k_.unsqueeze(2).matmul(xq.transpose(-1,-2)).add(score.unsqueeze(2))  # b h r c l
+            sscore = score.softmax(dim=-2)
+
+            # Backward pass
+            dvc[:,:,i] += sscore.to(dtype=dvc.dtype).matmul(dout_).sum(2)  # bhrcl,bhrld -> bhcd
+            
+            dscore = v_.unsqueeze(2).matmul(dout_.transpose(-1,-2))  # bhcd,bhrld -> bhrcl   <-- from out
+            dscore = dscore.sub(dscore.mul(sscore).sum(-2,True)).mul(sscore)  # <-- from softmax
+            dscore += sscore * ddenom_.unsqueeze(-2)  # b h r c l   <-- from denom
+
+            dxq += dscore.to(dtype=dxq.dtype).transpose(-1,-2).matmul(k_.unsqueeze(2))  # bhrcl, bhcd -> bhrld
+            dkc[:,:,i] += dscore.to(dtype=dkc.dtype).transpose(2,3).flatten(3,4).matmul(xq.flatten(2,3))  # bhrcl, bhrld -> bhcd
+
+            daff = dscore.sum(2)  # b h c l
+            daff = daff.flip([3]).cumsum(3).flip([3]).triu(i*c+1)  # <-- from cumsum
+            daff /= aff3.clamp(min=1e-6, max=1-1e-6)-1  # <-- from ln(1-x)
+            daff *= aff3.ge(0)
+            daff *= aff3.le(1-1e-6)
+            dstat = daff.mul(aff2).to(dtype=static_src.dtype)  # b h c l
+
+            dstat_src[:,:,i] += dstat.mul(static_dest.unsqueeze(-2)).sum(-1).div(static_src_.pow(2).mul(3))  # bhcl, bhl -> bhc
+            dstat_dest += dstat.mul(static_src_.unsqueeze(-1)).sum(-2).div(static_dest.pow(2).mul(3))  # bhcl, bhc -> bhl
+
+            daff = daff.mul(static_src_.unsqueeze(-1)*static_dest.unsqueeze(-2))  # <-- from prod with statics
+            daff = daff.to(dtype=xq.dtype) * aff1.abs().add(1e-9).pow(-1/3).mul(2/3).mul(aff1.gt(0))  # <-- from relu + pow
+
+            dkc += daff.transpose(-1,-2).matmul(k_).view(b,h,n,c,d)  # bhcl, bhcd -> bhld, <-- grad via kt
+            dkc[:,:,i] += daff.matmul(kt.transpose(-1,-2))  # bhcl, bhdl -> bhcd, <-- grad via k_
+
+        return dkc,dvc,dxq,dstat_src,dstat_dest
 
 
-__type_factory_map: dict[str, dict[str, Callable]] = {}
+class SMVecMatMul(Function):
+    @staticmethod
+    def forward(mat, vec):
+        # mat: ... d n
+        # vec: ... n
+        return mat.mul(vec.softmax(dim=-1).unsqueeze(-2)).sum(-1)
+
+    @staticmethod
+    def setup_context(ctx, inputs, outputs):
+        mat, vec = inputs
+        ctx.save_for_backward(mat, vec)
+
+    @ staticmethod
+    def backward(ctx, g):
+        mat, vec = ctx.saved_tensors
+        vec = vec.softmax(dim=-1)
+        d_mat = g.unsqueeze(-1).mul(vec.unsqueeze(-2))  # ... d n
+        d_vec = g.unsqueeze(-1).mul(mat).sum(-2)  # ... n
+        d_vec = d_vec.sub(d_vec.mul(vec).sum(-1,True)).mul(vec)
+        return d_mat, d_vec
 
 
 class AttentionKwargs(TypedDict, total=False):
@@ -51,222 +170,10 @@ class AttentionKwargs(TypedDict, total=False):
     attn_name: str
 
 
-# TODO: add adjusted_mask for alibi as part of attn_compute_dict
-def register_attention_op(
-    attn_type: str,
-    store_op: Callable[
-        [
-            torch.Tensor,
-            torch.Tensor,
-            Optional[torch.Tensor],
-            Optional[torch.Tensor],
-            Unpack[AttentionKwargs],
-        ],
-        Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
-    ],
-    compute_op: Callable[
-        [
-            torch.Tensor,
-            torch.Tensor,
-            torch.Tensor,
-            int,
-            int,
-            float,
-            float,
-            Unpack[AttentionKwargs],
-        ],
-        torch.Tensor,
-    ],
-    is_prefill_op: Optional[Callable[[Unpack[AttentionKwargs]], bool]] = None,
-    compute_decode_op: Optional[
-        Callable[
-            [
-                torch.Tensor,
-                torch.Tensor,
-                torch.Tensor,
-                int,
-                int,
-                float,
-                float,
-                Unpack[AttentionKwargs],
-            ],
-            torch.Tensor,
-        ]
-    ] = None,
-    update_attn_kwargs_op: Optional[
-        Callable[[Unpack[AttentionKwargs]], AttentionKwargs]
-    ] = None,
-    validate_attn_kwargs_op: Optional[
-        Callable[
-            [
-                torch.Tensor,
-                torch.Tensor,
-                Optional[List[Tuple[torch.Tensor, torch.Tensor]]],
-                Unpack["AttentionKwargs"],
-            ],
-            None,
-        ]
-    ] = None,
-) -> None:
-    """Register a custom attention operation to be used within MultiHeadAttention. This method also provides the ability to register other useful constructs related to the attention type.
-
-    Args:
-        attn_type: str
-            the name for the attention_op. This should correspond directly to the AttentionKwargs implementation
-        store_op: Callable[[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Unpack["AttentionKwargs"]], Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
-            This function has the following contract (keys, values, key_cache, value_cache, **attn_kwargs) -> (keys_compute, values_compute, keys_return, values_return). The intention
-            of this function is to provide a method of storing the keys in the key_cache and the values in the value_cache. The return of this method will include what keys/values to compute
-            on as well as what keys/values to return from MultiHeadAttention. Note: Reason for keeping these separate is that in some cases the keys to compute will be different than those
-            that are to be returned from MultiHeadAttention. For example, in Paged Attention, we may use sdpa as prefill (utilitizing the initial computed keys/values), but the returned cache
-            should be the larger cache that we stored to.
-        compute_op: Callable[[torch.Tensor, torch.Tensor, torch.Tensor, int, int, float, float, Unpack["AttentionKwargs"]], torch.Tensor]
-            This function has the following contract (query, key_cache, value_cache, nheads, kvheads, p_dropout, scale_factor, **attn_kwargs) -> (attn_output) --
-            query - b x qlen x h x ds, attn_output - b x qlen x h x ds. The intention of this function is perform attention computation. Note: the kv-cache may be very different in shape
-            depending on the type of attention
-        is_prefill_op: Optional[Callable[[Unpack["AttentionKwargs"]], bool]]
-            This function has the following contract (**attn_kwargs) -> bool. The intention of this function is to denote given the attention kwargs whether prefill or decode is being performed.
-            If prefill is being performed, the compute_op will be called, otherwise the compute_decode_op will be called. If set to None, this funcion will always return True.
-        compute_decode_op: Callable[[torch.Tensor, torch.Tensor, torch.Tensor, int, int, float, float, Unpack["AttentionKwargs"]], torch.Tensor]
-            This function has the following contract (query, key_cache, value_cache, nheads, kvheads, p_dropout, scale_factor, **attn_kwargs) -> (attn_output) --
-            query - b x qlen x h x ds, attn_output - b x qlen x h x ds. The intention of this function to provide a separate attention computation for decode. If this is set to something other than
-            compute_op, is_prefill_op should also be provided. If set to None, this will default to the compute_op. Note: the kv-cache may be very different in shape depending on the type of attention
-        update_attn_kwargs_op: Optional[Callable[[Unpack["AttentionKwargs"]], "AttentionKwargs"]]
-            This function has the following contract (**attn_kwargs) -> updated_attn_kwargs. The intention of this function is to act as a helper to update the attn_kwargs between each step within a
-            generation loop. If set to None, will return the attn_kwargs with no changes.
-        validate_attn_kwargs_op: Optional[Callable[[torch.Tensor, torch.Tensor, Optional[List[Tuple[torch.Tensor, torch.Tensor]]], Unpack["AttentionKwargs"]], None]]
-            This function has the following contract (input_ids, position_ids, past_key_value_states, **attn_kwargs) -> None. The intention of this function is do further validation against the
-            attn_kwargs for a given forward pass. If set to None, this function will perform no extra validation.
-    """
-    if attn_type in __type_factory_map:
-        raise KeyError(
-            f"Module mapping of attention type `{attn_type}` already registered"
-        )
-    if compute_decode_op is None:
-        compute_decode_op = compute_op
-
-    compute_dict = {
-        "store": store_op,
-        "is_prefill": (lambda **_: True) if is_prefill_op is None else is_prefill_op,
-        "compute_prefill": compute_op,
-        "compute_decode": compute_decode_op,
-        "update_attn_kwargs": (lambda **attn_kwargs: attn_kwargs)
-        if update_attn_kwargs_op is None
-        else update_attn_kwargs_op,
-        "validate_attn_kwargs": (lambda **_: None)
-        if validate_attn_kwargs_op is None
-        else validate_attn_kwargs_op,
-    }
-    __type_factory_map[attn_type] = compute_dict
-
-
 class SDPAAttentionKwargs(AttentionKwargs):
     mask: NotRequired[torch.Tensor]
     attn_algorithm: NotRequired[str]
     is_causal_mask: bool
-
-
-def _sdpa_store_op(
-    keys: torch.Tensor,
-    values: torch.Tensor,
-    key_cache: Optional[torch.Tensor],
-    value_cache: Optional[torch.Tensor],
-    **attn_kwargs,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    keys = keys.transpose(2, 1)
-    values = values.transpose(2, 1)
-
-    if key_cache is not None and value_cache is not None and value_cache.numel() > 0:
-        key_cache_result = torch.cat((key_cache, keys), dim=2)
-        value_cache_result = torch.cat((value_cache, values), dim=2)
-        return (
-            key_cache_result,
-            value_cache_result,
-            key_cache_result,
-            value_cache_result,
-        )
-    else:
-        return (keys, values, keys, values)
-
-
-def _sdpa_compute_op(
-    query: torch.Tensor,
-    key_cache: torch.Tensor,
-    value_cache: torch.Tensor,
-    nheads: int,
-    kvheads: int,
-    p_dropout: float,
-    scale_factor: Optional[float],
-    **attn_kwargs,
-) -> torch.Tensor:
-    queries = query.transpose(2, 1)
-
-    # no longer transposing prior to store, so need to check this in case of no cache
-    if key_cache.shape[1] != kvheads and key_cache.shape[2] == kvheads:
-        key_cache = key_cache.transpose(2, 1)
-        value_cache = value_cache.transpose(2, 1)
-    mask = attn_kwargs.get("mask", None)
-
-    # TODO: Once we add alibi support, merge rel pos bias and mask into single float mask
-    if mask is not None:
-        # Our expected mask format is bs x q_len x k_len, so to make it broadcastable
-        # we need to create the nheads dimension
-        while len(mask.size()) != 4:  # expects bs (x nheads) x q_len x kv_len
-            mask = mask.unsqueeze(1)
-
-    # Expand kv so black-box attn will work
-    expansion = nheads // kvheads
-    # k/v: b h l d
-    if expansion != 1:
-        keys_e = key_cache.unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
-        values_e = (
-            value_cache.unsqueeze(2).expand(-1, -1, expansion, -1, -1).flatten(1, 2)
-        )
-    else:
-        keys_e = key_cache
-        values_e = value_cache
-
-    attn_algorithm = attn_kwargs.get("attn_algorithm", None)
-    if attn_algorithm:
-        # Pick which fused attn kernels will run.
-        use_flash = attn_algorithm == "flash"
-        use_mem_efficient = attn_algorithm == "mem"
-        use_math = attn_algorithm == "math"
-
-        torch.backends.cuda.enable_flash_sdp(use_flash)
-        torch.backends.cuda.enable_mem_efficient_sdp(use_mem_efficient)
-        torch.backends.cuda.enable_math_sdp(use_math)
-
-    attn_mask = mask
-    if attn_mask is not None and attn_mask.dtype != torch.bool:
-        attn_mask = attn_mask.to(dtype=queries.dtype)
-
-    is_causal = attn_kwargs.get(
-        "is_causal_mask",
-        mask is None and not (key_cache.shape[2] != 1 and queries.shape[2] == 1),
-    )
-
-    # TODO: when updating to 2.7, use enable_gqa and stop using keys_e and values_e
-    attn = F.scaled_dot_product_attention(
-        queries,
-        keys_e,
-        values_e,
-        attn_mask=attn_mask,
-        dropout_p=p_dropout,
-        is_causal=is_causal,
-        scale=scale_factor,
-    )
-
-    if attn_algorithm:
-        torch.backends.cuda.enable_flash_sdp(__sdpa_previous_flash)
-        torch.backends.cuda.enable_mem_efficient_sdp(__sdpa_previous_mem_efficient)
-        torch.backends.cuda.enable_math_sdp(__sdpa_previous_math)
-
-    # attn: bs x seq_len x nheads*emb_v_per_head
-    # attn: b x h x qlen x ds
-    # attn after permute: b x qlen x h x ds
-    # b x qlen x (d)
-    attn = attn.transpose(2, 1).contiguous()
-    return attn
 
 
 def _sdpa_update_attn_kwargs(**attn_kwargs):
@@ -288,28 +195,6 @@ def _sdpa_update_attn_kwargs(**attn_kwargs):
 
         attn_kwargs["mask"] = mask
     return attn_kwargs
-
-
-register_attention_op(
-    "sdpa_causal",
-    _sdpa_store_op,
-    _sdpa_compute_op,
-    update_attn_kwargs_op=_sdpa_update_attn_kwargs,
-)
-register_attention_op(
-    "sdpa_bidirectional",
-    _sdpa_store_op,
-    functools.partial(_sdpa_compute_op, is_causal_mask=False),
-)
-
-
-def get_attention_type(**attn_kwargs: Unpack[AttentionKwargs]) -> dict[str, Callable]:
-    attn_name = attn_kwargs.get("attn_name", "sdpa_causal")
-    if attn_name not in __type_factory_map:
-        # we can add sdpa default here
-        raise KeyError("")
-
-    return __type_factory_map[attn_name]
 
 
 class QKV(nn.Module, metaclass=abc.ABCMeta):
@@ -584,16 +469,20 @@ class MultiHeadAttention(nn.Module):
             linear_config=linear_config,
         )
 
-        self.dense = get_linear(
+        self.dense = nn.Linear(
             self.nheads * self.emb_v_per_head,
             self.emb_dim,
             bias=use_bias,
-            linear_config=linear_config,
+            # linear_config=linear_config,
         )
 
         if self.p_dropout:
             self.attn_dropout = nn.Dropout(self.p_dropout)
         self.position_encoder = position_encoder
+
+        self.wstatic = nn.Linear(self.emb_dim, self.kvheads*2, bias=True)
+        self.UA = UniversalAttention.apply
+        self.SMVMM = SMVecMatMul.apply
 
     def reset_parameters(self):
         for m in self.modules():
@@ -603,9 +492,13 @@ class MultiHeadAttention(nn.Module):
                     m.bias.data.zero_()
             elif isinstance(m, QKV):
                 m.reset_parameters()
+        static_max = math.log(.1)
+        static_min = math.log(.001)
+        nn.init.uniform_(self.wstatic.bias)
+        self.wstatic.bias.data = self.wstatic.bias.data * (static_max - static_min) + static_min
 
-    def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
-        return TPMultiHeadAttention.import_module(self, group)
+    # def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
+    #     return TPMultiHeadAttention.import_module(self, group)
 
     def forward(
         self,
@@ -613,7 +506,7 @@ class MultiHeadAttention(nn.Module):
         k: Optional[torch.Tensor] = None,
         v: Optional[torch.Tensor] = None,
         position_ids=None,
-        past_key_value_state: Optional[Tuple[Tensor | None, Tensor | None]] = None,
+        past_key_value_state: Optional[Tuple[Tensor | None, Tensor | None, Tensor | None, Tensor | None]] = None,
         use_cache=False,
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
@@ -645,11 +538,17 @@ class MultiHeadAttention(nn.Module):
         # b x h x kvlen x ds
         # todo: Cross attention (This always is true for now)
         q_out, k_out, v_out = self.in_proj(q, k, v)
+        static = self.wstatic(q).sigmoid().view(batch_size, q_len, 2, self.kvheads).permute(2,0,3,1)  # 2 b h l
+        static_src = static[0]  # b h l
+        static_dest = static[1]  # b h l
 
         # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
         queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
         keys = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
         values = v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
+
+        # Normalize keys
+        keys = keys / keys.pow(2).sum(-1, True).sqrt().add(1e-6)
 
         # You want to apply rotary embeddings pre-cache
         if self.position_encoder is not None:
@@ -657,53 +556,90 @@ class MultiHeadAttention(nn.Module):
                 queries, keys, position_ids, past_key_value_state, use_cache
             )
 
-        attn_compute_dict = get_attention_type(**attn_kwargs)
+        if past_key_value_state is not None:
+            # Iterative universal attention
+            assert q_len == 1, "UA decoding not currently supported for more than 1 token"
+            # thresh = math.log(1e-4)
+            (k, v, r, a) = past_key_value_state  # bhld, bhld, bhl, bhl
+            k_ = keys.squeeze(1)  # b h d
+            v_ = values.squeeze(1)  # b h d
+            q = queries.view(batch_size, self.kvheads, -1, self.emb_kq_per_head)  # b h r d
+            static_src = static_src.squeeze(2)  # b h
+            static_dest = static_dest.squeeze(2)  # b h
 
-        if use_cache:
-            if past_key_value_state is None:
-                past_key_value_state = (None, None)
+            # Update k/v cache
+            k = torch.cat((k, k_.unsqueeze(2)), dim=2)
+            v = torch.cat((v, v_.unsqueeze(2)), dim=2)
 
-            keys_compute, values_compute, keys_return, values_return = (
-                attn_compute_dict["store"](
-                    keys,
-                    values,
-                    past_key_value_state[0],
-                    past_key_value_state[1],
-                    **attn_kwargs,
-                )
-            )
+            # q/k/k products
+            qkkk = k.matmul(torch.cat([q,k_.unsqueeze(2)], dim=2).transpose(-1,-2))  # b h l+1 r+1
+            qk = qkkk[...,:-1]  # b h l+1 r
+            kk = qkkk[:,:,:-1,-1]  # b h l
+
+            # Calculate decays
+            decay = kk.relu().float().pow(2)
+            decay = (decay * r * static_dest.unsqueeze(-1)).pow(1/3)
+            decay = torch.log1p(decay.clamp(min=0, max=1-1e-6).neg())
+            a = a + decay
+
+            # Update r/a cache
+            r = torch.cat((r, static_src.unsqueeze(2)), dim=2)
+            a = torch.cat((a, torch.zeros(batch_size, self.kvheads, 1, device=a.device, dtype=a.dtype)), dim=2)
+
+            # Perform scaled attention
+            attn = qk.add(a.unsqueeze(-1)).softmax(dim=2).transpose(-1,-2).matmul(v)  # b h r d
+            (keys, values, rates, affs) = k,v,r,a
+            
         else:
-            keys_compute, values_compute = keys, values
+            # Blockwise universal attention
+            queries = queries.transpose(1,2).view(batch_size, self.kvheads, -1, q_len, self.emb_kq_per_head)  # b h r l d
+            keys = keys.transpose(1,2)  # b h l d
+            values = values.transpose(1,2)  # b h l d
+            rates = static_src
 
-        if attn_compute_dict["is_prefill"](**attn_kwargs):
-            attn = attn_compute_dict["compute_prefill"](
-                queries,
-                keys_compute,
-                values_compute,
-                self.nheads,
-                self.kvheads,
-                self.p_dropout if self.training else 0.0,
-                self.scale_factor,
-                **attn_kwargs,
-            )
-        else:
-            attn = attn_compute_dict["compute_decode"](
-                queries,
-                keys_compute,
-                values_compute,
-                self.nheads,
-                self.kvheads,
-                self.p_dropout if self.training else 0.0,
-                self.scale_factor,
-                **attn_kwargs,
-            )
+            c = 16
+            b = batch_size
+            # Right-pad k,v,src if len not divisible by chunksize
+            if q_len % c != 0:
+                slack = c - q_len % c
+                queries = torch.cat([queries, torch.zeros(b, self.kvheads, self.nheads//self.kvheads, slack, self.emb_kq_per_head, 
+                                                          device=queries.device, dtype=queries.dtype)], dim=-2)
+                keys = torch.cat([keys, torch.zeros(b, self.kvheads, slack, self.emb_kq_per_head, 
+                                                          device=keys.device, dtype=keys.dtype)], dim=-2)
+                values = torch.cat([values, torch.zeros(b, self.kvheads, slack, self.emb_v_per_head, 
+                                                          device=values.device, dtype=values.dtype)], dim=-2)
+                static_src = torch.cat([static_src, torch.zeros(b, self.kvheads, slack,
+                                                               device=static_src.device, dtype=static_src.dtype)], dim=-1)
+                static_dest = torch.cat([static_dest, torch.zeros(b, self.kvheads, slack,
+                                                               device=static_dest.device, dtype=static_dest.dtype)], dim=-1)
+
+            # Chunk inputs
+            l = static_src.size(2)
+            n = l//c
+            s = [b, self.kvheads, n, c, -1]
+            kc = keys.view(*s)  # b h n c d
+            vc = values.view(*s)
+            static_src = static_src.view(b, self.kvheads, n, c)  # b h n c
+
+            # Perform UA
+            output, denom, affs = self.UA(kc, vc, queries, static_src, static_dest)
+
+            # Weighted avg for final softmax
+            output = self.SMVMM(output, denom)  # b h r l d
+            attn = output.permute(0,3,1,2,4).reshape(b,l,-1)
+
+            # Prune any right-padding
+            keys = keys[:,:,:q_len]
+            values = values[:,:,:q_len]
+            affs = affs[:,:,:q_len]
+            attn = attn[:,:q_len]
 
         attn = attn.view(batch_size, q_len, self.nheads * self.emb_v_per_head)
         out = self.dense(attn)
 
         # if use_cache=True, we return the hidden_state as well as the kv cache
         if use_cache:
-            return out, (keys_return, values_return)
+            return out, (keys, values, rates, affs)
         else:
             return out
 
