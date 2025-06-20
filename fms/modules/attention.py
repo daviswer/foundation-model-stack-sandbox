@@ -481,6 +481,8 @@ class MultiHeadAttention(nn.Module):
         self.position_encoder = position_encoder
 
         self.wstatic = nn.Linear(self.emb_dim, self.kvheads*2, bias=True)
+        self.register_buffer("staticb", torch.empty(self.kvheads*2))
+
         self.UA = UniversalAttention.apply
         self.SMVMM = SMVecMatMul.apply
 
@@ -494,8 +496,9 @@ class MultiHeadAttention(nn.Module):
                 m.reset_parameters()
         static_max = math.log(.1)
         static_min = math.log(.001)
-        nn.init.uniform_(self.wstatic.bias)
-        self.wstatic.bias.data = self.wstatic.bias.data * (static_max - static_min) + static_min
+        # nn.init.uniform_(self.wstatic.bias)
+        self.wstatic.bias.data.zero_()
+        self.staticb = torch.rand_like(self.staticb) * (static_max - static_min) + static_min
 
     # def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
     #     return TPMultiHeadAttention.import_module(self, group)
@@ -538,7 +541,8 @@ class MultiHeadAttention(nn.Module):
         # b x h x kvlen x ds
         # todo: Cross attention (This always is true for now)
         q_out, k_out, v_out = self.in_proj(q, k, v)
-        static = self.wstatic(q).sigmoid().view(batch_size, q_len, 2, self.kvheads).permute(2,0,3,1)  # 2 b h l
+        static = F.linear(q, self.wstatic.weight, self.staticb + self.wstatic.bias * math.sqrt(self.emb_dim))
+        static = static.sigmoid().view(batch_size, q_len, 2, self.kvheads).permute(2,0,3,1)  # 2 b h l
         static_src = static[0]  # b h l
         static_dest = static[1]  # b h l
 
