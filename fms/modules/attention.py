@@ -508,6 +508,12 @@ class FusedQKV(QKV):
         nn.init.trunc_normal_(self.qkv_fused.weight, mean=0.0, std=0.02)
         if self.use_bias:
             self.qkv_fused.bias.data.zero_()
+        # Align q to k at 1/10 noise level
+        qproj = self.qkv_fused.weight.data[:self.nheads*self.emb_kq_per_head]
+        kproj = self.qkv_fused.weight.data[self.nheads*self.emb_kq_per_head : (self.nheads+self.kvheads)*self.emb_kq_per_head]
+        kproj = kproj.repeat(self.nheads//self.kvheads, 1)
+        qproj = qproj*.1 + .9*kproj
+        self.qkv_fused.weight.data[:self.nheads*self.emb_kq_per_head] = qproj
 
     def forward(
         self, q: torch.Tensor, k: Optional[torch.Tensor], v: Optional[torch.Tensor]
