@@ -80,6 +80,7 @@ def _universal_attention_fwd_kernel(
     BLOCK_R: tl.constexpr, BLOCK_C: tl.constexpr, BLOCK_D: tl.constexpr,    # Block dims
     DTYPE: tl.constexpr,
 ):
+    print("ENTERED KERNEL")
     pid_b = tl.program_id(0)
     pid_h = tl.program_id(1)
     pid_i = tl.program_id(2)                # n_
