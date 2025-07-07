@@ -250,7 +250,7 @@ def _universal_attention_fwd(kc, vc, xq, static_src, static_dest):
     l = n_*c_
     dtype = xq.dtype
     device = xq.device
-    DTYPE_FLAG = tl.float16 if dtype == torch.float16 else tl.float32
+    DTYPE_FLAG = tl.bfloat16 if dtype == torch.bfloat16 else tl.float32
 
     out = torch.empty(b,h,r,l,d,n_, dtype=dtype, device=device)
     denom = torch.empty(b,h,r,l,n_, dtype=dtype, device=device)
@@ -856,7 +856,7 @@ def _universal_attention_bwd(kc, vc, xq, static_src, static_dest, dout, ddenom):
     l = n_*c_
     dtype = xq.dtype
     device = xq.device
-    DTYPE_FLAG = tl.float16 if dtype == torch.float16 else tl.float32
+    DTYPE_FLAG = tl.bfloat16 if dtype == torch.bfloat16 else tl.float32
 
     dkc = torch.empty(b,h,l,d, dtype=dtype, device=device)
     dvc = torch.empty(b,h,n_,c_,d, dtype=dtype, device=device)
