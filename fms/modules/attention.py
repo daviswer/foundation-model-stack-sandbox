@@ -1472,7 +1472,7 @@ class MultiHeadAttention(nn.Module):
             values = values.transpose(1,2)  # b h l d
             rates = static_src
 
-            c = 512
+            c = 128
             b = batch_size
             # Right-pad k,v,src if len not divisible by chunksize
             if q_len % c != 0:
@@ -1495,6 +1495,15 @@ class MultiHeadAttention(nn.Module):
             kc = keys.view(*s)  # b h n c d
             vc = values.view(*s)
             static_src = static_src.view(b, self.kvheads, n, c)  # b h n c
+            static_dest = static_dest.view(b, self.kvheads, n, c)  # b h n c
+            queries = queries.view(b, self.kvheads, self.nheads//self.kvheads, n, c, -1)
+                    
+            # Inputs:
+            # kc: b h n_ c_ d
+            # vc: b h n_ c_ d
+            # xq: b h r _n _c d
+            # static_src: b h n_ c_
+            # static_dest: b h _n _c
 
             # Perform UA
             output, denom, affs = self.UA(kc, vc, queries, static_src, static_dest)
