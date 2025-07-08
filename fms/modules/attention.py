@@ -1509,9 +1509,7 @@ class MultiHeadAttention(nn.Module):
             # static_dest: b h _n _c
 
             # Perform UA
-            print("GOTHERE")
             output, denom, affs = self.UA(kc, vc, queries, static_src, static_dest)
-            print("DONE")
 
             # Weighted avg for final softmax
             output = self.SMVMM(output, denom)  # b h r l d
