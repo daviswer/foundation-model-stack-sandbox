@@ -1474,7 +1474,7 @@ class MultiHeadAttention(nn.Module):
             values = values.transpose(1,2)  # b h l d
             rates = static_src
 
-            c = 64
+            c = 128
             b = batch_size
             # Right-pad k,v,src if len not divisible by chunksize
             if q_len % c != 0:
