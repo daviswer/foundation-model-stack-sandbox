@@ -893,7 +893,7 @@ def _universal_attention_bwd(kc, vc, xq, static_src, static_dest, dout, ddenom):
         dxq.stride(0), dxq.stride(1), dxq.stride(2), dxq.stride(3), dxq.stride(4), dxq.stride(5), 
         dstatic_src.stride(0), dstatic_src.stride(1), dstatic_src.stride(2), dstatic_src.stride(3), 
         dstatic_dest.stride(0), dstatic_dest.stride(1), dstatic_dest.stride(2), dstatic_dest.stride(3), 
-        BLOCK_R=_c, BLOCK_C=c_, BLOCK_D=8, DTYPE=DTYPE_FLAG, 
+        BLOCK_R=_c, BLOCK_C=c_, BLOCK_D=16, DTYPE=DTYPE_FLAG, 
     )
     dkc = dkc.view(b,h,n_,c_,d)
 
@@ -1497,8 +1497,9 @@ class MultiHeadAttention(nn.Module):
             kc = keys.view(*s)  # b h n c d
             vc = values.view(*s)
             static_src = static_src.view(b, self.kvheads, n, c)  # b h n c
-            static_dest = static_dest.view(b, self.kvheads, n, c)  # b h n c
-            queries = queries.view(b, self.kvheads, self.nheads//self.kvheads, n, c, -1)
+            # Shrink _c to 64
+            static_dest = static_dest.view(b, self.kvheads, n*2, c//2)  # b h n c
+            queries = queries.view(b, self.kvheads, self.nheads//self.kvheads, n*2, c//2, -1)
                     
             # Inputs:
             # kc: b h n_ c_ d
