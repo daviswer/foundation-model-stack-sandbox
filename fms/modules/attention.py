@@ -1517,7 +1517,7 @@ class MultiHeadAttention(nn.Module):
             # Prune any right-padding
             keys = keys[:,:,:q_len]
             values = values[:,:,:q_len]
-            affs = affs[:,:,:q_len]
+            affs = affs if affs is None else affs[:,:,:q_len]
             attn = attn[:,:q_len]
 
         attn = attn.view(batch_size, q_len, self.nheads * self.emb_v_per_head)
