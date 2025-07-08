@@ -80,7 +80,6 @@ def _universal_attention_fwd_kernel(
     BLOCK_R: tl.constexpr, BLOCK_C: tl.constexpr, BLOCK_D: tl.constexpr,    # Block dims
     DTYPE: tl.constexpr,
 ):
-    print("ENTERED KERNEL")
     pid_b = tl.program_id(0)
     pid_h = tl.program_id(1)
     pid_i = tl.program_id(2)                # n_
@@ -261,6 +260,7 @@ def _universal_attention_fwd(kc, vc, xq, static_src, static_dest):
     # Due to the sum buffer for column cumulative sum, we want to process that dimension sequencially
     grid = (b,h,n_)
 
+    print("Entering kernel")
     _universal_attention_fwd_kernel[grid](
         kc, vc, xq, kt, static_src, static_dest, out, denom,                                                  
         b, h, r, n_, _n, d, 
@@ -274,6 +274,7 @@ def _universal_attention_fwd(kc, vc, xq, static_src, static_dest):
         denom.stride(0), denom.stride(1), denom.stride(2), denom.stride(3), denom.stride(4), 
         BLOCK_R=_c, BLOCK_C=c_, DTYPE=DTYPE_FLAG, 
     )
+    print("Exited kernel")
 
     return out, denom
 
