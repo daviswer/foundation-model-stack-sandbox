@@ -273,7 +273,7 @@ def _universal_attention_fwd(kc, vc, xq, static_src, static_dest):
         static_dest.stride(0), static_dest.stride(1), static_dest.stride(2), static_dest.stride(3), 
         out.stride(0), out.stride(1), out.stride(2), out.stride(3), out.stride(4), out.stride(5), 
         denom.stride(0), denom.stride(1), denom.stride(2), denom.stride(3), denom.stride(4), 
-        BLOCK_R=_c, BLOCK_C=c_, BLOCK_D=128, DTYPE=DTYPE_FLAG, 
+        BLOCK_R=_c, BLOCK_C=c_, BLOCK_D=64, DTYPE=DTYPE_FLAG, 
     )
     print("Exited kernel")
 
@@ -894,7 +894,7 @@ def _universal_attention_bwd(kc, vc, xq, static_src, static_dest, dout, ddenom):
         dxq.stride(0), dxq.stride(1), dxq.stride(2), dxq.stride(3), dxq.stride(4), dxq.stride(5), 
         dstatic_src.stride(0), dstatic_src.stride(1), dstatic_src.stride(2), dstatic_src.stride(3), 
         dstatic_dest.stride(0), dstatic_dest.stride(1), dstatic_dest.stride(2), dstatic_dest.stride(3), 
-        BLOCK_R=_c, BLOCK_C=c_, BLOCK_D=128, DTYPE=DTYPE_FLAG, 
+        BLOCK_R=_c, BLOCK_C=c_, BLOCK_D=64, DTYPE=DTYPE_FLAG, 
     )
     dkc = dkc.view(b,h,n_,c_,d)
 
