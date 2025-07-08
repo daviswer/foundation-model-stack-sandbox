@@ -57,10 +57,10 @@ configs = [
 #     Forward Kernel & Interface     #
 ######################################
 '''
-@triton.autotune(
-    configs=configs,
-    key=['r', 'n_', '_n', 'd'],
-)
+# @triton.autotune(
+#     configs=configs,
+#     key=['r', 'n_', '_n', 'd'],
+# )
 @triton.jit
 def _universal_attention_fwd_kernel(
     # Pointers to matrices
