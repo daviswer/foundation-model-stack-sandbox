@@ -547,7 +547,7 @@ def _universal_attention_bwd_kernel(
 
                     tl.store(
                         dvc_ptr + offs_i[:, None] * str_dvc_c_ + offs_d[None, :] * str_dvc_d, 
-                        dvc_mat + tl.dot(score_softmax, dout_mat, input_precision="ieee"), 
+                        dvc_mat + tl.dot(tl.cast(score_softmax, tl.float32), dout_mat, input_precision="ieee"), 
                         mask=(offs_i[:, None] < BLOCK_C) & (offs_d[None, :] < d), 
                     )
 
