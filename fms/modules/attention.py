@@ -591,7 +591,7 @@ class MultiHeadAttention(nn.Module):
             a = torch.cat((a, torch.zeros(batch_size, self.kvheads, 1, device=a.device, dtype=a.dtype)), dim=2)
 
             # Perform scaled attention
-            attn = qk.add(a.unsqueeze(-1)).softmax(dim=2).transpose(-1,-2).matmul(v)  # b h r d
+            attn = qk.float().add(a.unsqueeze(-1)).softmax(dim=2).to(dtype=v.dtype).transpose(-1,-2).matmul(v)  # b h r d
             (keys, values, rates, affs) = k,v,r,a
             
         else:
