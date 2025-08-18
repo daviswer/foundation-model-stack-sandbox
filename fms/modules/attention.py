@@ -677,8 +677,12 @@ class MultiHeadAttention(nn.Module):
         else:
             keys_compute, values_compute = keys, values
 
-        if attn_compute_dict["is_prefill"](**attn_kwargs):
+        if q_len == 1:
+            self.pos += 1
+        else:
             self.pos = q_len
+        
+        if attn_compute_dict["is_prefill"](**attn_kwargs):
             attn = attn_compute_dict["compute_prefill"](
                 queries,
                 keys_compute,
@@ -690,7 +694,6 @@ class MultiHeadAttention(nn.Module):
                 **attn_kwargs,
             )
         else:
-            self.pos += 1
             attn = attn_compute_dict["compute_decode"](
                 queries,
                 keys_compute,
