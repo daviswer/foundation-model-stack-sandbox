@@ -1,5 +1,6 @@
 import abc
 import functools
+import math
 from typing import (
     Any,
     Callable,
@@ -573,6 +574,7 @@ class MultiHeadAttention(nn.Module):
         self.fused = fused
         self.linear_config = linear_config
         self.scale_factor = scale_factor
+        self.pos = 0
 
         self.in_proj: QKV = (FusedQKV if self.fused else UnfusedQKV)(
             self.emb_dim,
@@ -676,6 +678,7 @@ class MultiHeadAttention(nn.Module):
             keys_compute, values_compute = keys, values
 
         if attn_compute_dict["is_prefill"](**attn_kwargs):
+            self.pos = q_len
             attn = attn_compute_dict["compute_prefill"](
                 queries,
                 keys_compute,
@@ -683,10 +686,11 @@ class MultiHeadAttention(nn.Module):
                 self.nheads,
                 self.kvheads,
                 self.p_dropout if self.training else 0.0,
-                self.scale_factor,
+                self.scale_factor * math.log2(self.pos) / math.log2(4096),
                 **attn_kwargs,
             )
         else:
+            self.pos += 1
             attn = attn_compute_dict["compute_decode"](
                 queries,
                 keys_compute,
@@ -694,7 +698,7 @@ class MultiHeadAttention(nn.Module):
                 self.nheads,
                 self.kvheads,
                 self.p_dropout if self.training else 0.0,
-                self.scale_factor,
+                self.scale_factor * math.log2(self.pos) / math.log2(4096),
                 **attn_kwargs,
             )
 
