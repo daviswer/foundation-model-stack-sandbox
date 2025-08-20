@@ -573,7 +573,7 @@ class MultiHeadAttention(nn.Module):
         self.use_bias = use_bias
         self.fused = fused
         self.linear_config = linear_config
-        self.scale_factor = scale_factor
+        self.scale_factor = emb_kq**-.5 if scale_factor is None else scale_factor
         self.pos = 0
 
         self.in_proj: QKV = (FusedQKV if self.fused else UnfusedQKV)(
@@ -690,7 +690,7 @@ class MultiHeadAttention(nn.Module):
                 self.nheads,
                 self.kvheads,
                 self.p_dropout if self.training else 0.0,
-                math.log2(max(self.pos, 4096)) / math.log2(4096) / self.emb_kq_per_head**.5,
+                self.scale_factor * math.log2(max(self.pos, 4096)) / math.log2(4096),
                 **attn_kwargs,
             )
         else:
@@ -701,7 +701,7 @@ class MultiHeadAttention(nn.Module):
                 self.nheads,
                 self.kvheads,
                 self.p_dropout if self.training else 0.0,
-                math.log2(max(self.pos, 4096)) / math.log2(4096) / self.emb_kq_per_head**.5,
+                self.scale_factor * math.log2(max(self.pos, 4096)) / math.log2(4096),
                 **attn_kwargs,
             )
 
