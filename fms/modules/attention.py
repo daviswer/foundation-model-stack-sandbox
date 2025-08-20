@@ -690,7 +690,7 @@ class MultiHeadAttention(nn.Module):
                 self.nheads,
                 self.kvheads,
                 self.p_dropout if self.training else 0.0,
-                self.scale_factor * math.log2(self.pos) / math.log2(4096),
+                math.log2(max(self.pos, 4096)) / math.log2(4096) / self.emb_kq_per_head**.5,
                 **attn_kwargs,
             )
         else:
@@ -701,7 +701,7 @@ class MultiHeadAttention(nn.Module):
                 self.nheads,
                 self.kvheads,
                 self.p_dropout if self.training else 0.0,
-                self.scale_factor * math.log2(self.pos) / math.log2(4096),
+                math.log2(max(self.pos, 4096)) / math.log2(4096) / self.emb_kq_per_head**.5,
                 **attn_kwargs,
             )
 
