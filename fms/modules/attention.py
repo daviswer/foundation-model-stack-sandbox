@@ -607,8 +607,9 @@ class MultiHeadAttention(nn.Module):
                 queries, 
                 keys[:,None].expand(-1, queries.size(1), -1, -1, -1), 
                 values[:,None].expand(-1, queries.size(1), -1, -1, -1), 
-                attn_mask=mask[:,None].expand(-1, queries.size(1), -1, -1, -1).detach(),
+                attn_mask=mask[:,None].expand(-1, queries.size(1), -1, -1, -1),
             )
+            affs = None
 
             # c = 512
             # b = batch_size
