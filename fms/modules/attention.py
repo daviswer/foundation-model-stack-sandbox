@@ -35,7 +35,7 @@ from fms.modules.tp import TPModule
 
 from torch.autograd import Function
 
-from ua_triton import attention
+from fms.modules.ua_triton import attention
 
 
 class AttentionKwargs(TypedDict, total=False):
