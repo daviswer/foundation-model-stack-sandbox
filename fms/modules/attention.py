@@ -472,51 +472,52 @@ class MultiHeadAttention(nn.Module):
             
         else:
             # Blockwise universal attention
-            queries = queries.transpose(1,2).view(batch_size, self.kvheads, -1, q_len, self.emb_kq_per_head)  # b h r l d
+            queries = queries.transpose(1,2).view(batch_size, -1, self.kvheads, q_len, self.emb_kq_per_head)  # b r h l d
             keys = keys.transpose(1,2)  # b h l d
             values = values.transpose(1,2)  # b h l d
             rates = static_src
 
-            c = 1024
+            c = 128
             b = batch_size
-            # Right-pad k,v,src if len not divisible by chunksize
-            if q_len % c != 0:
-                slack = c - q_len % c
-                queries = torch.cat([queries, torch.zeros(b, self.kvheads, self.nheads//self.kvheads, slack, self.emb_kq_per_head, 
-                                                          device=queries.device, dtype=queries.dtype)], dim=-2)
-                keys = torch.cat([keys, torch.zeros(b, self.kvheads, slack, self.emb_kq_per_head, 
-                                                          device=keys.device, dtype=keys.dtype)], dim=-2)
-                values = torch.cat([values, torch.zeros(b, self.kvheads, slack, self.emb_v_per_head, 
-                                                          device=values.device, dtype=values.dtype)], dim=-2)
-                static_src = torch.cat([static_src, torch.zeros(b, self.kvheads, slack,
-                                                               device=static_src.device, dtype=static_src.dtype)], dim=-1)
-                static_dest = torch.cat([static_dest, torch.zeros(b, self.kvheads, slack,
-                                                               device=static_dest.device, dtype=static_dest.dtype)], dim=-1)
+            # # Right-pad k,v,src if len not divisible by chunksize
+            # if q_len % c != 0:
+            #     slack = c - q_len % c
+            #     queries = torch.cat([queries, torch.zeros(b, self.kvheads, self.nheads//self.kvheads, slack, self.emb_kq_per_head, 
+            #                                               device=queries.device, dtype=queries.dtype)], dim=-2)
+            #     keys = torch.cat([keys, torch.zeros(b, self.kvheads, slack, self.emb_kq_per_head, 
+            #                                               device=keys.device, dtype=keys.dtype)], dim=-2)
+            #     values = torch.cat([values, torch.zeros(b, self.kvheads, slack, self.emb_v_per_head, 
+            #                                               device=values.device, dtype=values.dtype)], dim=-2)
+            #     static_src = torch.cat([static_src, torch.zeros(b, self.kvheads, slack,
+            #                                                    device=static_src.device, dtype=static_src.dtype)], dim=-1)
+            #     static_dest = torch.cat([static_dest, torch.zeros(b, self.kvheads, slack,
+            #                                                    device=static_dest.device, dtype=static_dest.dtype)], dim=-1)
 
             # Perform UA
             r = self.nheads // self.kvheads
-            l = queries.size(2)
-            queries = queries.permute(0,2,1,3,4).reshape(-1, self.kvheads, l, self.emb_kq_per_head)
-            keys = keys[:,None].expand(-1,r,-1,-1,-1).reshape(-1, self.kvheads, l, self.emb_kq_per_head)
-            values = values[:,None].expand(-1,r,-1,-1,-1).reshape(-1, self.kvheads, l, self.emb_v_per_head)
-            static_src = static_src[:,None].expand(-1,r,-1,-1).reshape(-1, self.kvheads, l)
-            static_dest = static_dest[:,None].expand(-1,r,-1,-1).reshape(-1, self.kvheads, l)
+            l = queries.size(3)
+            queries = queries.reshape(-1, self.kvheads, l, self.emb_kq_per_head)
+            keys_ = keys[:,None].expand(-1,r,-1,-1,-1).reshape(-1, self.kvheads, l, self.emb_kq_per_head)
+            values_ = values[:,None].expand(-1,r,-1,-1,-1).reshape(-1, self.kvheads, l, self.emb_v_per_head)
+            static_src_ = static_src[:,None].expand(-1,r,-1,-1).reshape(-1, self.kvheads, l)
+            static_dest_ = static_dest[:,None].expand(-1,r,-1,-1).reshape(-1, self.kvheads, l)
             output = attention(
                 queries,
-                keys,
-                values,
+                keys_,
+                values_,
                 True,
                 self.emb_kq_per_head**-.5,
-                static_src,
-                static_dest,
-            )  # b h r l d
-            attn = output.permute(0,3,1,2,4).reshape(b,l,-1)
+                static_src_,
+                static_dest_,
+            )  # br h l d
+            attn = output.view(batch_size, self.nheads, l, -1).transpose(1,2).reshape(b,l,-1)  # b l rhd
 
-            # Prune any right-padding
-            keys = keys[:,:,:q_len]
-            values = values[:,:,:q_len]
-            affs = affs[:,:,:q_len]
-            attn = attn[:,:q_len]
+            # # Prune any right-padding
+            # keys = keys[:,:,:q_len]
+            # values = values[:,:,:q_len]
+            # affs = affs[:,:,:q_len]
+            # attn = attn[:,:q_len]
+            affs = None
 
         attn = attn.view(batch_size, q_len, self.nheads * self.emb_v_per_head)
         out = self.dense(attn)
