@@ -601,7 +601,7 @@ class MultiHeadAttention(nn.Module):
             values = values.transpose(1,2)  # b h l d
             rates = static_src
 
-            mask = self._gen_affinity_scores(k, static_src, static_dest)  # b h l_q l_k
+            mask = self._gen_affinity_scores(keys, static_src, static_dest)  # b h l_q l_k
             r = self.nheads // self.kvheads
             attn = F.scaled_dot_product_attention(
                 queries, 
