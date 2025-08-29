@@ -605,10 +605,10 @@ class MultiHeadAttention(nn.Module):
             r = self.nheads // self.kvheads
             torch.backends.cuda.enable_math_sdp(False)
             attn = F.scaled_dot_product_attention(
-                queries, 
-                keys[:,None].expand(-1, queries.size(1), -1, -1, -1), 
-                values[:,None].expand(-1, queries.size(1), -1, -1, -1), 
-                attn_mask=mask[:,None].expand(-1, queries.size(1), -1, -1, -1),
+                queries.reshape(-1, *queries.size()[-3:]), 
+                keys[:,None].expand(-1, r, -1, -1, -1).reshape(-1, *keys.size()[-3:]), 
+                values[:,None].expand(-1, r, -1, -1, -1).reshape(-1, *values.size()[-3:]), 
+                attn_mask=mask[:,None].expand(-1, r, -1, -1, -1).reshape(-1, *attn_mask.size()[-3:]),
             )
             affs = None
 
