@@ -603,6 +603,7 @@ class MultiHeadAttention(nn.Module):
 
             mask = self._gen_affinity_scores(keys, static_src, static_dest)  # b h l_q l_k
             r = self.nheads // self.kvheads
+            torch.backends.cuda.enable_math_sdp(False)
             attn = F.scaled_dot_product_attention(
                 queries, 
                 keys[:,None].expand(-1, queries.size(1), -1, -1, -1), 
