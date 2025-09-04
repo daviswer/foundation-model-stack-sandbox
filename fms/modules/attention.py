@@ -805,8 +805,8 @@ class MultiHeadAttention(nn.Module):
         self.wstatic = nn.Linear(self.emb_dim, self.kvheads*2, bias=True)
         self.register_buffer("staticb", torch.empty(self.kvheads*2))
 
-        self.UA = UniversalAttention.apply
-        self.SMVMM = SMVecMatMul.apply
+        # self.UA = UniversalAttention.apply
+        # self.SMVMM = SMVecMatMul.apply
 
     def reset_parameters(self):
         for m in self.modules():
