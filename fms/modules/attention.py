@@ -596,7 +596,7 @@ class MultiHeadAttention(nn.Module):
             
         else:
             # Blockwise universal attention
-            queries = queries.transpose(1,2).view(batch_size, -1, self.kvheads, q_len, self.emb_kq_per_head)   # b r h l d
+            queries = queries.transpose(1,2)   # b hr l d
             keys = keys.transpose(1,2)  # b h l d
             values = values.transpose(1,2)  # b h l d
             rates = static_src
@@ -605,10 +605,10 @@ class MultiHeadAttention(nn.Module):
             r = self.nheads // self.kvheads
             torch.backends.cuda.enable_math_sdp(False)
             attn = F.scaled_dot_product_attention(
-                queries.reshape(-1, *queries.size()[-3:]), 
-                keys[:,None].expand(-1, r, -1, -1, -1).reshape(-1, *keys.size()[-3:]), 
-                values[:,None].expand(-1, r, -1, -1, -1).reshape(-1, *values.size()[-3:]), 
-                attn_mask=mask[:,None].expand(-1, r, -1, -1, -1).reshape(-1, *mask.size()[-3:]),
+                queries, 
+                keys.repeat_interleave(1,r,1,1), 
+                values.repeat_interleave(1,r,1,1), 
+                attn_mask=mask.repeat_interleave(1,r,1,1),
             )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
             affs = None
