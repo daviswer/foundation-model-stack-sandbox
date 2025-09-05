@@ -47,8 +47,8 @@ configs = [
 ]
 
 # Optimal config tuned on A100
-fwd_A100 = [triton.Config({'BLOCK_I': 64, 'BLOCK_J': 32}, num_stages=3, num_warps=4)]
-bwd_A100 = [triton.Config({'BLOCK_I': 32, 'BLOCK_J': 32}, num_stages=2, num_warps=2)]
+fwd_A100 = [triton.Config({'BLOCK_I': 16, 'BLOCK_J': 128}, num_stages=2, num_warps=4)]
+bwd_A100 = [triton.Config({'BLOCK_I': 16, 'BLOCK_J': 32}, num_stages=2, num_warps=2)]
 bwd_col_A100 = [triton.Config({'BLOCK_I': 64, 'BLOCK_J': 32}, num_stages=2, num_warps=2)]
 
 '''
@@ -86,6 +86,7 @@ def _aff_fwd_kernel(
     dest_ptr = dest + pid_b * str_dest_b + pid_h * str_dest_h
 
     offs_i = pid_i * BLOCK_I + tl.arange(0, BLOCK_I)
+    offs_i = tl.max_contiguous(tl.multiple_of(offs_i, BLOCK_I), BLOCK_I)
 
     src_vec = tl.load(src_ptr + offs_i * str_src_li, mask=(offs_i < L), other=0.0)
     src_mat = tl.sqrt_rn(src_vec + err)[:, None]
@@ -94,21 +95,22 @@ def _aff_fwd_kernel(
 
     for j_blocks in range(tl.cdiv(L, BLOCK_J)):
         offs_j = j_blocks * BLOCK_J + tl.arange(0, BLOCK_J)
+        offs_j = tl.max_contiguous(tl.multiple_of(offs_j, BLOCK_J), BLOCK_J)
 
         dest_vec = tl.load(dest_ptr + offs_j * str_dest_lj, mask=(offs_j < L), other=0.0)
         dest_mat = tl.sqrt_rn(dest_vec + err)[:, None]
 
         affinity = tl.zeros((BLOCK_I, BLOCK_J), dtype=tl.float32)
 
-        for d_offset in range(0, D, BLOCK_D):
-            offs_d = d_offset + tl.arange(0, BLOCK_D)
-            k_mat = tl.load(k_ptr + offs_i[:, None] * str_k_l + offs_d[None, :] * str_k_d, 
-                mask=(offs_i[:, None] < L) & (offs_d[None, :] < D), other=0.0)
-            kt_mat = tl.load(k_ptr + offs_j[:, None] * str_k_l + offs_d[None, :] * str_k_d, 
-                mask=(offs_j[:, None] < L) & (offs_d[None, :] < D), other=0.0)
+        offs_d = tl.arange(0, BLOCK_D)
+        offs_d = tl.max_contiguous(offs_d, BLOCK_D)
+        k_mat = tl.load(k_ptr + offs_i[:, None] * str_k_l + offs_d[None, :] * str_k_d, 
+            mask=(offs_i[:, None] < L) & (offs_d[None, :] < D), other=0.0)
+        kt_mat = tl.load(k_ptr + offs_j[:, None] * str_k_l + offs_d[None, :] * str_k_d, 
+            mask=(offs_j[:, None] < L) & (offs_d[None, :] < D), other=0.0)
 
-            # Use ieee to use fp32, otherwise the default would be tf32
-            affinity += tl.dot(k_mat*src_mat, tl.trans(kt_mat*dest_mat), out_dtype=tl.float32)
+        # Use ieee to use fp32, otherwise the default would be tf32
+        affinity += tl.dot(k_mat*src_mat, tl.trans(kt_mat*dest_mat), out_dtype=tl.float32)
 
         # .relu().pow(2/3), already in fp32
         affinity = tl.exp2(tl.log2(tl.maximum(affinity, err)) * 2.0 / 3.0)
@@ -153,7 +155,7 @@ def _affinity_fwd(k, src, dest):
         src.stride(0), src.stride(1), src.stride(2), 
         dest.stride(0), dest.stride(1), dest.stride(2), 
         aff.stride(0), aff.stride(1), aff.stride(2), aff.stride(3), 
-        B=b, H=h, L=l, D=d, BLOCK_D=triton.cdiv(d, 4)
+        B=b, H=h, L=l, D=d, BLOCK_D=d,
     )
 
     return aff.transpose(-1, -2).to(k.dtype)
@@ -199,10 +201,8 @@ def _aff_bwd_kernel(
     dsrc_ptr = dsrc + pid_b * str_dsrc_b + pid_h * str_dsrc_h
 
     offs_i = pid_i * BLOCK_I + tl.arange(0, BLOCK_I)
+    offs_i = tl.max_contiguous(tl.multiple_of(offs_i, BLOCK_I), BLOCK_I)
     offs_d_1 = tl.arange(0, BLOCK_D)
-    offs_d_2 = tl.arange(BLOCK_D, 2*BLOCK_D)
-    offs_d_3 = tl.arange(2*BLOCK_D, 3*BLOCK_D)
-    offs_d_4 = tl.arange(3*BLOCK_D, 4*BLOCK_D)
 
     src_vec = tl.load(src_ptr + offs_i * str_src_li, mask=(offs_i < L), other=0.0)
     src_mat = tl.sqrt_rn(src_vec + err)[:, None]
@@ -210,12 +210,10 @@ def _aff_bwd_kernel(
     suff_sum = tl.zeros((BLOCK_I,), dtype=tl.float32)
     dsrc_acc = tl.zeros((BLOCK_I,), dtype=tl.float32)
     dk_i_acc_1 = tl.zeros((BLOCK_I, BLOCK_D), dtype=tl.float32)
-    dk_i_acc_2 = tl.zeros((BLOCK_I, BLOCK_D), dtype=tl.float32)
-    dk_i_acc_3 = tl.zeros((BLOCK_I, BLOCK_D), dtype=tl.float32)
-    dk_i_acc_4 = tl.zeros((BLOCK_I, BLOCK_D), dtype=tl.float32)
 
     for j_blocks in range(tl.cdiv(L, BLOCK_J) - 1, -1, -1):
         offs_j = j_blocks * BLOCK_J + tl.arange(0, BLOCK_J)
+        offs_j = tl.max_contiguous(tl.multiple_of(offs_j, BLOCK_J), BLOCK_J)
 
         dest_vec = tl.load(dest_ptr + offs_j * str_dest_lj, mask=(offs_j < L), other=0.0)
         dest_mat = tl.sqrt_rn(dest_vec + err)[:, None]
@@ -228,24 +226,6 @@ def _aff_bwd_kernel(
             mask=(offs_j[:, None] < L) & (offs_d_1[None, :] < D), other=0.0)
         affinity_1 += tl.dot(k_mat*src_mat, tl.trans(kt_mat*dest_mat), out_dtype=tl.float32)
 
-        k_mat = tl.load(k_ptr + offs_i[:, None] * str_k_l + offs_d_2[None, :] * str_k_d, 
-            mask=(offs_i[:, None] < L) & (offs_d_2[None, :] < D), other=0.0)
-        kt_mat = tl.load(k_ptr + offs_j[:, None] * str_k_l + offs_d_2[None, :] * str_k_d, 
-            mask=(offs_j[:, None] < L) & (offs_d_2[None, :] < D), other=0.0)
-        affinity_1 += tl.dot(k_mat*src_mat, tl.trans(kt_mat*dest_mat), out_dtype=tl.float32)
-
-        k_mat = tl.load(k_ptr + offs_i[:, None] * str_k_l + offs_d_3[None, :] * str_k_d, 
-            mask=(offs_i[:, None] < L) & (offs_d_3[None, :] < D), other=0.0)
-        kt_mat = tl.load(k_ptr + offs_j[:, None] * str_k_l + offs_d_3[None, :] * str_k_d, 
-            mask=(offs_j[:, None] < L) & (offs_d_3[None, :] < D), other=0.0)
-        affinity_1 += tl.dot(k_mat*src_mat, tl.trans(kt_mat*dest_mat), out_dtype=tl.float32)
-
-        k_mat = tl.load(k_ptr + offs_i[:, None] * str_k_l + offs_d_4[None, :] * str_k_d, 
-            mask=(offs_i[:, None] < L) & (offs_d_4[None, :] < D), other=0.0)
-        kt_mat = tl.load(k_ptr + offs_j[:, None] * str_k_l + offs_d_4[None, :] * str_k_d, 
-            mask=(offs_j[:, None] < L) & (offs_d_4[None, :] < D), other=0.0)
-        affinity_1 += tl.dot(k_mat*src_mat, tl.trans(kt_mat*dest_mat), out_dtype=tl.float32)
-
         affinity_2 = tl.maximum(affinity_1, 0.0)
         affinity_3 = tl.exp2(tl.log2(affinity_2 + err) * 2.0 / 3.0)
 
@@ -255,11 +235,16 @@ def _aff_bwd_kernel(
 
         daffinity = tl.where((offs_i[:, None] > offs_j[None, :]), 0.0, daffinity)
 
-        daffinity_cs = tl.cumsum(daffinity, axis=1, reverse=True) + suff_sum[:, None]
+        # Correct reverse cumsum: first compute local cumsum, then add suffix from previous blocks
+        daffinity_cs = tl.cumsum(daffinity, axis=1, reverse=True)
+        daffinity_cs += suff_sum[:, None]
+        # Update suffix sum for next block (this should happen AFTER using the current suff_sum)
         suff_sum += tl.sum(daffinity, axis=1)
         
         daffinity = tl.where((offs_i[:, None] < offs_j[None, :]), daffinity_cs, 0.0)
 
+        # Use numerically stable log gradient: d/dx log1p(-x) = -1/(1-x)
+        # But clamp the denominator to avoid division by very small numbers
         daffinity = -daffinity / (1.0 - tl.clamp(affinity_3, 0.0, 1.0 - 1e-6))
         daffinity = daffinity * (2.0/3.0) * tl.exp2(tl.log2(affinity_2 + err) * (-1.0/3.0))
         daffinity = tl.where(affinity_1 > 0, daffinity, 0.0)
@@ -271,30 +256,12 @@ def _aff_bwd_kernel(
             mask=(offs_j[:, None] < L) & (offs_d_1[None, :] < D), other=0.0)
         dk_i_acc_1 += tl.dot(daffinity, kt_mat*dest_mat, out_dtype=tl.float32)
 
-        kt_mat = tl.load(k_ptr + offs_j[:, None] * str_k_l + offs_d_2[None, :] * str_k_d, 
-            mask=(offs_j[:, None] < L) & (offs_d_2[None, :] < D), other=0.0)
-        dk_i_acc_2 += tl.dot(daffinity, kt_mat*dest_mat, out_dtype=tl.float32)
-
-        kt_mat = tl.load(k_ptr + offs_j[:, None] * str_k_l + offs_d_3[None, :] * str_k_d, 
-            mask=(offs_j[:, None] < L) & (offs_d_3[None, :] < D), other=0.0)
-        dk_i_acc_3 += tl.dot(daffinity, kt_mat*dest_mat, out_dtype=tl.float32)
-
-        kt_mat = tl.load(k_ptr + offs_j[:, None] * str_k_l + offs_d_4[None, :] * str_k_d, 
-            mask=(offs_j[:, None] < L) & (offs_d_4[None, :] < D), other=0.0)
-        dk_i_acc_4 += tl.dot(daffinity, kt_mat*dest_mat, out_dtype=tl.float32)
-
         dsrc_acc += tl.sum(daffinity * affinity_1.cast(tl.bfloat16), axis=1) 
            
     tl.store(dsrc_ptr + offs_i * str_dsrc_li, tl.div_rn(dsrc_acc, 2.0*(src_vec+err)), mask=(offs_i < L))
 
     tl.store(dki_ptr + offs_i[:, None] * str_dki_l + offs_d_1[None, :] * str_dki_d, 
         dk_i_acc_1.cast(tl.bfloat16) * src_mat, mask=(offs_i[:, None] < L) & (offs_d_1[None, :] < D))
-    tl.store(dki_ptr + offs_i[:, None] * str_dki_l + offs_d_2[None, :] * str_dki_d, 
-        dk_i_acc_2.cast(tl.bfloat16) * src_mat, mask=(offs_i[:, None] < L) & (offs_d_2[None, :] < D))
-    tl.store(dki_ptr + offs_i[:, None] * str_dki_l + offs_d_3[None, :] * str_dki_d, 
-        dk_i_acc_3.cast(tl.bfloat16) * src_mat, mask=(offs_i[:, None] < L) & (offs_d_3[None, :] < D))
-    tl.store(dki_ptr + offs_i[:, None] * str_dki_l + offs_d_4[None, :] * str_dki_d, 
-        dk_i_acc_4.cast(tl.bfloat16) * src_mat, mask=(offs_i[:, None] < L) & (offs_d_4[None, :] < D))
 
 @triton.autotune(
     configs=bwd_col_A100,
@@ -331,18 +298,12 @@ def _aff_bwd_col_kernel(
 
     offs_j = pid_j * BLOCK_J + tl.arange(0, BLOCK_J)
     offs_d_1 = tl.arange(0, BLOCK_D)
-    offs_d_2 = tl.arange(BLOCK_D, 2*BLOCK_D)
-    offs_d_3 = tl.arange(2*BLOCK_D, 3*BLOCK_D)
-    offs_d_4 = tl.arange(3*BLOCK_D, 4*BLOCK_D)
 
     dest_vec = tl.load(dest_ptr + offs_j * str_dest_lj, mask=(offs_j < L), other=0.0)
     dest_mat = tl.sqrt_rn(dest_vec + err)[:, None]
 
     ddest_acc = tl.zeros((BLOCK_J,), dtype=tl.float32)
     dk_j_acc_1 = tl.zeros((BLOCK_J, BLOCK_D), dtype=tl.float32)
-    dk_j_acc_2 = tl.zeros((BLOCK_J, BLOCK_D), dtype=tl.float32)
-    dk_j_acc_3 = tl.zeros((BLOCK_J, BLOCK_D), dtype=tl.float32)
-    dk_j_acc_4 = tl.zeros((BLOCK_J, BLOCK_D), dtype=tl.float32)
 
 
     for i_offset in range(0, L, BLOCK_I):
@@ -364,42 +325,12 @@ def _aff_bwd_col_kernel(
         affinity_1 += tl.dot(k_src, tl.trans(kt_mat*dest_mat), out_dtype=tl.float32)
         dk_j_acc_1 += tl.dot(tl.trans(daffinity), k_src, out_dtype=tl.float32)
 
-        k_mat = tl.load(k_ptr + offs_i[:, None] * str_k_l + offs_d_2[None, :] * str_k_d, 
-            mask=(offs_i[:, None] < L) & (offs_d_2[None, :] < D), other=0.0)
-        kt_mat = tl.load(k_ptr + offs_j[:, None] * str_k_l + offs_d_2[None, :] * str_k_d, 
-            mask=(offs_j[:, None] < L) & (offs_d_2[None, :] < D), other=0.0)
-        k_src = k_mat * src_mat
-        affinity_1 += tl.dot(k_src, tl.trans(kt_mat*dest_mat), out_dtype=tl.float32)
-        dk_j_acc_2 += tl.dot(tl.trans(daffinity), k_src, out_dtype=tl.float32)
-
-        k_mat = tl.load(k_ptr + offs_i[:, None] * str_k_l + offs_d_3[None, :] * str_k_d, 
-            mask=(offs_i[:, None] < L) & (offs_d_3[None, :] < D), other=0.0)
-        kt_mat = tl.load(k_ptr + offs_j[:, None] * str_k_l + offs_d_3[None, :] * str_k_d, 
-            mask=(offs_j[:, None] < L) & (offs_d_3[None, :] < D), other=0.0)
-        k_src = k_mat * src_mat
-        affinity_1 += tl.dot(k_src, tl.trans(kt_mat*dest_mat), out_dtype=tl.float32)
-        dk_j_acc_3 += tl.dot(tl.trans(daffinity), k_src, out_dtype=tl.float32)
-
-        k_mat = tl.load(k_ptr + offs_i[:, None] * str_k_l + offs_d_4[None, :] * str_k_d, 
-            mask=(offs_i[:, None] < L) & (offs_d_4[None, :] < D), other=0.0)
-        kt_mat = tl.load(k_ptr + offs_j[:, None] * str_k_l + offs_d_4[None, :] * str_k_d, 
-            mask=(offs_j[:, None] < L) & (offs_d_4[None, :] < D), other=0.0)
-        k_src = k_mat * src_mat
-        affinity_1 += tl.dot(k_src, tl.trans(kt_mat*dest_mat), out_dtype=tl.float32)
-        dk_j_acc_4 += tl.dot(tl.trans(daffinity), k_src, out_dtype=tl.float32)
-
         ddest_acc += tl.sum(daffinity * affinity_1.cast(tl.bfloat16), axis=0) 
 
     tl.store(ddest_ptr + offs_j * str_ddest_lj, tl.div_rn(ddest_acc, 2.0 * (dest_vec + err)), mask=(offs_j < L))
 
     tl.store(dkj_ptr + offs_j[:, None] * str_dkj_l + offs_d_1[None, :] * str_dkj_d, 
         dk_j_acc_1.cast(tl.bfloat16) * dest_mat, mask=(offs_j[:, None] < L) & (offs_d_1[None, :] < D))
-    tl.store(dkj_ptr + offs_j[:, None] * str_dkj_l + offs_d_2[None, :] * str_dkj_d, 
-        dk_j_acc_2.cast(tl.bfloat16) * dest_mat, mask=(offs_j[:, None] < L) & (offs_d_2[None, :] < D))
-    tl.store(dkj_ptr + offs_j[:, None] * str_dkj_l + offs_d_3[None, :] * str_dkj_d, 
-        dk_j_acc_3.cast(tl.bfloat16) * dest_mat, mask=(offs_j[:, None] < L) & (offs_d_3[None, :] < D))
-    tl.store(dkj_ptr + offs_j[:, None] * str_dkj_l + offs_d_4[None, :] * str_dkj_d, 
-        dk_j_acc_4.cast(tl.bfloat16) * dest_mat, mask=(offs_j[:, None] < L) & (offs_d_4[None, :] < D))
     
 def _affinity_bwd(k, src, dest, daff):
     '''
@@ -433,7 +364,7 @@ def _affinity_bwd(k, src, dest, daff):
         daff_cs.stride(0), daff_cs.stride(1), daff_cs.stride(2), daff_cs.stride(3),       
         dk_i.stride(0), dk_i.stride(1), dk_i.stride(2), dk_i.stride(3), 
         dsrc.stride(0), dsrc.stride(1), dsrc.stride(2),  
-        B=b, H=h, L=l, D=d, BLOCK_D=triton.cdiv(d, 4)     
+        B=b, H=h, L=l, D=d, BLOCK_D=d
     )
 
     grid_j = lambda META: (b, h, triton.cdiv(l, META['BLOCK_J']))
@@ -445,7 +376,7 @@ def _affinity_bwd(k, src, dest, daff):
         daff_cs.stride(0), daff_cs.stride(1), daff_cs.stride(2), daff_cs.stride(3), 
         dk_j.stride(0), dk_j.stride(1), dk_j.stride(2), dk_j.stride(3),
         ddest.stride(0), ddest.stride(1), ddest.stride(2), 
-        B=b, H=h, L=l, D=d, BLOCK_D=triton.cdiv(d, 4)
+        B=b, H=h, L=l, D=d, BLOCK_D=d
     )
 
     dk = dk_i + dk_j
