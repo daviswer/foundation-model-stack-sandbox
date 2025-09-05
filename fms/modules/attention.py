@@ -601,8 +601,8 @@ class MultiHeadAttention(nn.Module):
             values = values.transpose(1,2)  # b h l d
             rates = static_src
 
-            mask = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
             r = self.nheads // self.kvheads
+            mask = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
             torch.backends.cuda.enable_math_sdp(False)
             attn = F.scaled_dot_product_attention(
                 queries, 
