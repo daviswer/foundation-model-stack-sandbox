@@ -606,9 +606,9 @@ class MultiHeadAttention(nn.Module):
             torch.backends.cuda.enable_math_sdp(False)
             attn = F.scaled_dot_product_attention(
                 queries, 
-                keys.repeat_interleave(1,r,1,1), 
-                values.repeat_interleave(1,r,1,1), 
-                attn_mask=mask.repeat_interleave(1,r,1,1),
+                torch.repeat_interleave(keys,r,dim=1), 
+                torch.repeat_interleave(values,r,dim=1), 
+                attn_mask=torch.repeat_interleave(mask,r,dim=1),
             )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
             affs = None
