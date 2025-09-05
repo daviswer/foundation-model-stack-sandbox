@@ -658,7 +658,8 @@ class MultiHeadAttention(nn.Module):
             return out, (keys, values, rates, affs)
         else:
             return out
-        
+
+    @torch.compile
     def _gen_affinity_scores(self, k, src, dest):
         affinity = torch.einsum('bnqh, bnkh -> bnqk', k*src.sqrt().unsqueeze(-1), k*dest.sqrt().unsqueeze(-1)).relu().float().pow(2/3)
         affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())
