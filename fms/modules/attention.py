@@ -609,6 +609,7 @@ class MultiHeadAttention(nn.Module):
                 keys[:,None].expand(-1, r, -1, -1, -1).reshape(-1, *keys.size()[-3:]), 
                 values[:,None].expand(-1, r, -1, -1, -1).reshape(-1, *values.size()[-3:]), 
                 attn_mask=mask[:,None].expand(-1, r, -1, -1, -1).reshape(-1, *mask.size()[-3:]),
+                scale=1,
             )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
             affs = None
