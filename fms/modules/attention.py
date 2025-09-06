@@ -609,6 +609,7 @@ class MultiHeadAttention(nn.Module):
                 torch.repeat_interleave(keys,r,dim=1), 
                 torch.repeat_interleave(values,r,dim=1), 
                 attn_mask=mask,
+                scale=1,
             )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
             affs = None
