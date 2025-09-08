@@ -612,7 +612,7 @@ class MultiHeadAttention(nn.Module):
                 scale=1,
             )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
-            affs = None
+            affs = mask[0,0,-1]
 
             # c = 512
             # b = batch_size
