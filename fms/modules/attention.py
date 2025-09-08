@@ -596,23 +596,23 @@ class MultiHeadAttention(nn.Module):
             
         else:
             # Blockwise universal attention
-            queries = queries.transpose(1,2).view(batch_size, -1, self.kvheads, q_len, self.emb_kq_per_head)   # b r h l d
+            queries = queries.transpose(1,2)   # b hr l d
             keys = keys.transpose(1,2)  # b h l d
             values = values.transpose(1,2)  # b h l d
             rates = static_src
 
-            mask = self._gen_affinity_scores(keys, static_src, static_dest)  # b h l_q l_k
             r = self.nheads // self.kvheads
+            mask = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
             torch.backends.cuda.enable_math_sdp(False)
             attn = F.scaled_dot_product_attention(
-                queries.reshape(-1, *queries.size()[-3:]), 
-                keys[:,None].expand(-1, r, -1, -1, -1).reshape(-1, *keys.size()[-3:]), 
-                values[:,None].expand(-1, r, -1, -1, -1).reshape(-1, *values.size()[-3:]), 
-                attn_mask=mask[:,None].expand(-1, r, -1, -1, -1).reshape(-1, *mask.size()[-3:]),
+                queries, 
+                torch.repeat_interleave(keys,r,dim=1), 
+                torch.repeat_interleave(values,r,dim=1), 
+                attn_mask=mask,
                 scale=1,
             )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
-            affs = None
+            affs = mask[0,0,-1]
 
             # c = 512
             # b = batch_size
@@ -661,11 +661,12 @@ class MultiHeadAttention(nn.Module):
             return out
 
     @torch.compile
-    def _gen_affinity_scores(self, k, src, dest):
+    def _gen_affinity_scores(self, k, src, dest, r):
         affinity = torch.einsum('bnqh, bnkh -> bnqk', k*src.sqrt().unsqueeze(-1), k*dest.sqrt().unsqueeze(-1)).relu().float().pow(2/3)
         affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())
         affinity = affinity.triu(1).cumsum(3).to(dtype=k.dtype)
-        return torch.transpose(affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).tril(-1), -1e12), -1, -2).contiguous()
+        affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).tril(-1), -1e12).transpose(-1, -2)
+        return torch.repeat_interleave(affinity,r,dim=1)
 
 
 
