@@ -59,6 +59,7 @@ class LLaMAConfig(ModelConfig):
     rope_scaling: dict = field(default_factory=lambda: {})
     linear_config: Optional[Mapping[str, Any]] = None
     fused_weights: bool = True
+    rope_partial: float = 1.0
 
 
 class LLaMABlock(nn.Module):
@@ -213,6 +214,7 @@ class LLaMA(nn.Module):
             scaling=self.config.rope_scaling,
             max_seq_len=self.config.max_expected_seq_len,
             ratio=self.config.rope_theta,
+            partial_rope=self.config.rope_partial,
         )
         # RoPE init
         for device in set(
