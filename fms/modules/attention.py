@@ -675,7 +675,7 @@ class MultiHeadAttention(nn.Module):
         else:
             keys_compute, values_compute = keys, values
 
-        queries = queries * torch.arange(q_len, type=queries.dtype, device=queries.device).view(1,-1,1,1).log1p().div(math.log(4096))
+        queries = queries * torch.arange(q_len, dtype=queries.dtype, device=queries.device).view(1,-1,1,1).clamp(min=1).div(4096).log().div(10).add(1).pow(2)
         if attn_compute_dict["is_prefill"](**attn_kwargs):
             attn = attn_compute_dict["compute_prefill"](
                 queries,
