@@ -35,6 +35,9 @@ from fms.modules.tp import TPModule
 
 from torch.autograd import Function
 
+def get_attention_type():
+    pass
+
 class UniversalAttention(Function):
     @staticmethod
     def forward(kc, vc, xq, static_src, static_dest):
