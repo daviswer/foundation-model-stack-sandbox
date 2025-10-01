@@ -1,4 +1,6 @@
-from typing import Optional, Unpack
+from typing import Optional
+from typing_extensions import Unpack
+
 
 from fms.modules.attention import SDPAAttentionKwargs
 import torch

@@ -3,7 +3,9 @@ import logging
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional, Unpack
+from typing import Any, Mapping, Optional
+from typing_extensions import Unpack
+
 
 import torch
 from torch import nn
