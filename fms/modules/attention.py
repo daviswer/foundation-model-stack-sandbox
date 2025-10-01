@@ -569,7 +569,7 @@ class MultiHeadAttention(nn.Module):
             v_ = values.squeeze(1)  # b h d
             q = queries.view(batch_size, self.kvheads, -1, self.emb_kq_per_head)  # b h r d
             static_src = static_src.squeeze(2)  # b h
-            static_dest = static_dest.squeeze(2)  # b h
+            # static_dest = static_dest.squeeze(2)  # b h
 
             # Update k/v cache
             k = torch.cat((k, k_.unsqueeze(2)), dim=2)
@@ -581,8 +581,7 @@ class MultiHeadAttention(nn.Module):
             kk = qkkk[:,:,:-1,-1]  # b h l
 
             # Calculate decays
-            decay = kk.relu().float().pow(2)
-            decay = (decay * r * static_dest.unsqueeze(-1)).pow(1/3)
+            decay = kk.relu().float() * r.sqrt()
             decay = torch.log1p(decay.clamp(min=0, max=1-1e-6).neg())
             a = a + decay
 
