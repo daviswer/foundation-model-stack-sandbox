@@ -601,7 +601,7 @@ class MultiHeadAttention(nn.Module):
             queries = queries.transpose(1,2)   # b hr l d
             keys = keys.transpose(1,2)  # b h l d
             values = values.transpose(1,2)  # b h l d
-            rates = static_src
+            rates = torch.ones_like(static_src)
 
             r = self.nheads // self.kvheads
             mask = self._gen_affinity_scores(keys, torch.ones_like(static_src), static_dest, r)  # b h l_q l_k
@@ -614,7 +614,7 @@ class MultiHeadAttention(nn.Module):
                 scale=1,
             )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
-            affs = mask[0,0,-1]
+            affs = mask.view(batch_size, self.kvheads, -1, mask.size(-2), mask.size(-1))[:,:,0,-1]
 
             # c = 512
             # b = batch_size
