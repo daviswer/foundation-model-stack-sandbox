@@ -675,7 +675,19 @@ class MultiHeadAttention(nn.Module):
         else:
             keys_compute, values_compute = keys, values
 
-        queries = queries * torch.arange(q_len, dtype=queries.dtype, device=queries.device).view(1,-1,1,1).clamp(min=1).div(4096).log().div(10).add(1).pow(2)
+        if position_ids is None:
+            # Compute position_ids based on cache config
+            position_ids = torch.arange(
+                0, q_len, dtype=torch.long, device=queries.device
+            ).view(1,-1,1,1)
+            if (
+                use_cache
+                and past_key_value_state is not None
+                and past_key_value_state[0] is not None
+                and past_key_value_state[0].numel() > 0
+            ):
+                position_ids += past_key_value_state[0].size(2)
+        queries = queries * position_ids.clamp(min=1).div(4096).log().div(10).add(1).pow(2)
         if attn_compute_dict["is_prefill"](**attn_kwargs):
             attn = attn_compute_dict["compute_prefill"](
                 queries,
