@@ -680,7 +680,22 @@ class MultiHeadAttention(nn.Module):
             self.pos += 1
         else:
             self.pos = q_len
-        
+
+        if position_ids is None:
+            # Compute position_ids based on cache config
+            position_ids = torch.arange(
+                0, q_len, dtype=torch.long, device=queries.device
+            ).view(1,-1,1,1)
+            if (
+                use_cache
+                and past_key_value_state is not None
+                and past_key_value_state[0] is not None
+                and past_key_value_state[0].numel() > 0
+            ):
+                position_ids += past_key_value_state[0].size(2)
+        queries = queries * position_ids.clamp(min=4096).div(4096).log().div(10).add(1).pow(2)
+        if max(position_ids) != self.pos:
+            print(f"ERROR: final position indices do not match: {self.pos, max(position_ids)}")
         if attn_compute_dict["is_prefill"](**attn_kwargs):
             attn = attn_compute_dict["compute_prefill"](
                 queries,
@@ -689,7 +704,7 @@ class MultiHeadAttention(nn.Module):
                 self.nheads,
                 self.kvheads,
                 self.p_dropout if self.training else 0.0,
-                self.scale_factor * math.log2(max(self.pos, 4096)) / math.log2(4096),
+                self.scale_factor,
                 **attn_kwargs,
             )
         else:
@@ -700,7 +715,7 @@ class MultiHeadAttention(nn.Module):
                 self.nheads,
                 self.kvheads,
                 self.p_dropout if self.training else 0.0,
-                self.scale_factor * math.log2(max(self.pos, 4096)) / math.log2(4096),
+                self.scale_factor,
                 **attn_kwargs,
             )
 
