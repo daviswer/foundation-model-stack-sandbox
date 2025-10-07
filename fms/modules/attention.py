@@ -2415,7 +2415,7 @@ class MultiHeadAttention(nn.Module):
             
         else:
             # Blockwise universal attention
-            queries = queries.transpose(1,2).view(batch_size, -1, self.kvheads, q_len, self.emb_kq_per_head)   # b r h l d
+            queries = queries.transpose(1,2)  # b rh l d
             keys = keys.transpose(1,2)  # b h l d
             values = values.transpose(1,2)  # b h l d
             rates = static_src
