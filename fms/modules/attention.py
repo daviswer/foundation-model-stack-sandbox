@@ -2420,7 +2420,7 @@ class MultiHeadAttention(nn.Module):
             values = values.transpose(1,2)  # b h l d
             rates = static_src
 
-            attn = self.UA(keys, values, queries, static_src, static_dest)
+            attn = self.UA(keys, values, queries, static_src, static_dest).to(dtype=queries.dtype)
 
             # mask = _gen_affinity_scores(keys, static_src, static_dest)  # b h l_q l_k
             # r = self.nheads // self.kvheads
