@@ -33,6 +33,7 @@ from fms.utils.headless import gather_outputs
 
 from .llama import (
     LLaMAConfig,
+    LLaMAHeadless,
 )
 # [CL] original YOCO import from fairseq.model_parallel.megatron.mpu, 
 #       this package (pip install megatron-core) may be newer
@@ -460,13 +461,10 @@ class CrossDecoder(nn.Module):
 # end of codes modified from YOCO --------- 
 
 
-class LLaMAHeadlessYOCO(nn.Module):
-    """Original Llama arch in fms
-    (LlamaHeadless).[ (LlamaBlock) * n ], where (LlamaBlock) has .attn and .ff_sub_layer
-    => replace [LlamaBlock * n] with 2 new classes
-    (LlamaHeadlessYOCO).[self_decoder + cross_decoder]
-        where .self_decoder.[(modifiedLlamaBlock)* n//2]
-        where .cross_decoder.[(modifiedLlamaBlock)* n//2]
+class LLaMAHeadlessYOCO(LLaMAHeadless):
+    """Replace [LlamaBlock * n] with 2 new (borrowed) classes [SelfDecoder + CrossDecoder]
+        where SelfDecoder has [(modifiedLlamaBlock)* n//2]
+        where CrossDecoder has [(modifiedLlamaBlock)* n//2]
     """
     def __init__(
         self,
@@ -475,6 +473,9 @@ class LLaMAHeadlessYOCO(nn.Module):
         **kwargs,
     ):
         super().__init__()
+        delattr(self, "layers")
+        # NOTE super.init will have created all the Llama layers already. Among which, we will not
+        # need the original .layers, i.e. the modList of transformer blocks.
 
         # [CL] make sure YOCO specific defaults exists, values based on YOCO paper/repo
         config.sliding_window = getattr(config, "sliding_window", 1024)  # 1st line on page 8 of the paper
