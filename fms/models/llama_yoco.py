@@ -23,7 +23,7 @@ from fms.modules.attention import (
 from fms.modules.feedforward import GatedLinearUnit
 from fms.modules.head import LinearClassificationHead
 from fms.modules.layernorm import LayerNormParameterized
-from fms.modules.linear import get_linear_type
+from fms.modules.linear import get_linear_type, get_linear
 from fms.modules.positions import RotaryEmbedding
 from fms.modules.yoco_rotary import apply_rotary_emb
 from fms.utils import serialization
@@ -36,10 +36,8 @@ from .llama import (
 )
 # [CL] original YOCO import from fairseq.model_parallel.megatron.mpu, 
 #       this package (pip install megatron-core) may be newer
-from megatron.core.tensor_parallel import (
-    ColumnParallelLinear,
-    RowParallelLinear
-)
+# from megatron.core.tensor_parallel import ColumnParallelLinear, RowParallelLinear
+
 
 logger = logging.getLogger(__name__)
 
@@ -91,16 +89,19 @@ class SlidingWindowAttention(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.embed_dim = cfg.emb_dim
-        self.num_heads = cfg.nheads // cfg.model_parallel_size
-        self.window_size = cfg.sliding_window  # TODO lookup YOCO setting and set a default here
-        
+        self.num_heads = cfg.nheads // getattr(cfg,"model_parallel_size", 1)  # TODO use world size or rank to replace this var
+        self.window_size = cfg.sliding_window  # we set this in LlamaYOCO init already        
         self.head_dim = cfg.emb_dim // cfg.nheads
 
-        self.q_proj = ColumnParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, gather_output=False, init_method=init_method)
-        self.k_proj = ColumnParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, gather_output=False, init_method=init_method)
-        self.v_proj = ColumnParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, gather_output=False, init_method=init_method)
-        self.out_proj = RowParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, input_is_parallel=True, init_method=init_method)
-    
+        # self.q_proj = ColumnParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, gather_output=False, init_method=init_method)
+        # self.k_proj = ColumnParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, gather_output=False, init_method=init_method)
+        # self.v_proj = ColumnParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, gather_output=False, init_method=init_method)
+        # self.out_proj = RowParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, input_is_parallel=True, init_method=init_method)
+        self.q_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
+        self.k_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
+        self.v_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
+        self.out_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
+
     def forward(
         self,
         x,
@@ -137,6 +138,7 @@ class SlidingWindowAttention(nn.Module):
                 incremental_state["prev_value"][:bsz, start_pos : start_pos + tgt_len] = v
         else:
             key, value = k, v
+
         attn = flash_attn_func(q, key, value, causal=True, window_size=(self.window_size - 1, 0)) 
         attn = attn.reshape(bsz, tgt_len, self.head_dim * self.num_heads)
 
@@ -149,12 +151,14 @@ class CrossAttention(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.embed_dim = cfg.emb_dim
-        self.num_heads = cfg.nheads // cfg.model_parallel_size
-        self.num_kv_heads = cfg.n_attn_kv_heads // cfg.model_parallel_size
+        self.num_heads = cfg.nheads // getattr(cfg,"model_parallel_size", 1)
+        self.num_kv_heads = cfg.kvheads // getattr(cfg,"model_parallel_size", 1)
         
         self.head_dim = cfg.emb_dim // cfg.nheads
-        self.q_proj = ColumnParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, gather_output=False, init_method=init_method)
-        self.out_proj = RowParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, input_is_parallel=True, init_method=init_method)
+        # self.q_proj = ColumnParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, gather_output=False, init_method=init_method)
+        # self.out_proj = RowParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, input_is_parallel=True, init_method=init_method)
+        self.q_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
+        self.out_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
 
     def forward(
         self,
@@ -341,7 +345,7 @@ class SelfDecoder(nn.Module):
     def build_rel_pos(self, x, start_pos):
         if self._precomputed_freqs_cis is None:
             angle = 1.0 / (self.config.rope_theta ** torch.linspace(0, 1, self.head_dim // 2, dtype=torch.float, device=x.device))
-            index = torch.arange(self.config.max_seq_len).to(angle)
+            index = torch.arange(self.config. max_expected_seq_len).to(angle)
             self._precomputed_freqs_cis = index[:, None] * angle
 
         cos = torch.cos(self._precomputed_freqs_cis[start_pos:start_pos+x.size(1)])
@@ -395,10 +399,12 @@ class CrossDecoder(nn.Module):
     ):
         super().__init__()
         self.config = config
-        self.num_heads = config.n_attn_kv_heads
+        self.num_heads = config.kvheads
         self.head_dim = config.emb_dim // config.nheads
-        self.k_proj = ColumnParallelLinear(config.emb_dim, self.head_dim * config.n_attn_kv_heads, bias=False, gather_output=False, init_method=init_method)
-        self.v_proj = ColumnParallelLinear(config.emb_dim, self.head_dim * config.n_attn_kv_heads, bias=False, gather_output=False, init_method=init_method)
+        # self.k_proj = ColumnParallelLinear(config.emb_dim, self.head_dim * config.kvheads, bias=False, gather_output=False, init_method=init_method)
+        # self.v_proj = ColumnParallelLinear(config.emb_dim, self.head_dim * config.kvheads, bias=False, gather_output=False, init_method=init_method)
+        self.k_proj = get_linear(config.emb_dim, self.head_dim * config.kvheads, bias=False, linear_config=config.linear_config)
+        self.v_proj = get_linear(config.emb_dim, self.head_dim * config.kvheads, bias=False, linear_config=config.linear_config)
         self.kv_layer_norm = RMSNorm(config.emb_dim, eps=config.norm_eps)
         layers = [LLaMABlockYOCO(config, rot_emb, attn_type="cross_attn") for idx in range(config.nlayers // 2)]
         # if checkpoint_activations:
@@ -409,7 +415,7 @@ class CrossDecoder(nn.Module):
     def build_rel_pos(self, x, start_pos):
         if self._precomputed_freqs_cis is None:
             angle = 1.0 / (self.config.rope_theta ** torch.linspace(0, 1, self.head_dim // 2, dtype=torch.float, device=x.device))
-            index = torch.arange(self.config.max_seq_len).to(angle)
+            index = torch.arange(self.config.max_expected_seq_len).to(angle)
             self._precomputed_freqs_cis = index[:, None] * angle
 
         cos = torch.cos(self._precomputed_freqs_cis[start_pos:start_pos+x.size(1)])
@@ -434,8 +440,8 @@ class CrossDecoder(nn.Module):
 
         if incremental_state is not None:
             if "prev_key" not in incremental_state:
-                incremental_state["prev_key"] = torch.empty(bsz, self.config.max_seq_len, self.num_heads, self.head_dim, device=x.device, dtype=x.dtype)
-                incremental_state["prev_value"] = torch.empty(bsz, self.config.max_seq_len, self.num_heads, self.head_dim, device=x.device, dtype=x.dtype)
+                incremental_state["prev_key"] = torch.empty(bsz, self.config.max_expected_seq_len, self.num_heads, self.head_dim, device=x.device, dtype=x.dtype)
+                incremental_state["prev_value"] = torch.empty(bsz, self.config.max_expected_seq_len, self.num_heads, self.head_dim, device=x.device, dtype=x.dtype)
             incremental_state["prev_key"][:, start_pos : start_pos + seqlen] = key
             incremental_state["prev_value"][:, start_pos : start_pos + seqlen] = value
             key = incremental_state["prev_key"][:, : start_pos + seqlen]
@@ -469,10 +475,17 @@ class LLaMAHeadlessYOCO(nn.Module):
         **kwargs,
     ):
         super().__init__()
+
+        # [CL] make sure YOCO specific defaults exists, values based on YOCO paper/repo
+        config.sliding_window = getattr(config, "sliding_window", 1024)  # 1st line on page 8 of the paper
+        config.max_batch_size = getattr(config, "batch_size", 8)
+        # print(config)
+
         if config is not None:
             self.config = config
         else:
             self.config = LLaMAConfig()
+
         self.config = self.config.updated(**kwargs)
         self.distributed_strategy = distributed_strategy
 
@@ -553,20 +566,6 @@ class LLaMAHeadlessYOCO(nn.Module):
         # this is the output cache for all the decoder layers
         present_key_value_states = []
 
-        # for i, layer in enumerate(self.layers):
-        #     output = layer(
-        #         x=x_in,
-        #         position_ids=position_ids,
-        #         past_key_value_state=past_key_value_states[i],
-        #         use_cache=use_cache,
-        #         **attn_kwargs,
-        #     )
-
-        #     if use_cache:
-        #         x_in, present_key_value_state = output
-        #         present_key_value_states.append(present_key_value_state)
-        #     else:
-        #         x_in = output
         x_in = self.self_decoder(
             x_in,
             incremental_state=past_key_value_states,
@@ -757,7 +756,7 @@ _granite_8b_code_config = LLaMAConfig(
     tie_heads=True,
 )
 
-_architecture_name = "llama"
+_architecture_name = "llama_yoco"
 
 
 def _llama_factory_factory(config):
@@ -803,11 +802,11 @@ models.register_model(
 
 # Create all the pieces to generate adapters for different checkpoints
 serialization.register_adapter_step(
-    "llama", "pre0.0.6_attn_unfused_to_fused", serialization._pre006_attn_adapter_step
+    "llama_yoco", "pre0.0.6_attn_unfused_to_fused", serialization._pre006_attn_adapter_step
 )
 
 serialization.register_adapter_step(
-    "llama",
+    "llama_yoco",
     "swiglu_unfused_to_fused",
     serialization._mlp_glu_unfused_to_fused_adapter_step,
 )
@@ -829,7 +828,7 @@ def _weight_fusion(
     return new_sd
 
 
-serialization.register_adapter_step("llama", "weight_fusion", _weight_fusion)
+serialization.register_adapter_step("llama_yoco", "weight_fusion", _weight_fusion)
 
 
 def _hf_gptq_llama_check(
@@ -852,7 +851,7 @@ def _hf_gptq_llama_check(
 
 
 serialization.register_adapter_step(
-    "llama", "hf_gptq_fusion_check", _hf_gptq_llama_check
+    "llama_yoco", "hf_gptq_fusion_check", _hf_gptq_llama_check
 )
 
 
@@ -883,7 +882,7 @@ def _meta_to_fms_names(input_sd: Mapping[str, Any], **kwargs) -> Mapping[str, An
     return new_sd
 
 
-serialization.register_adapter_step("llama", "meta_to_fms_names", _meta_to_fms_names)
+serialization.register_adapter_step("llama_yoco", "meta_to_fms_names", _meta_to_fms_names)
 
 
 def _hf_to_fms_names(input_sd: Mapping[str, Any], **kwargs) -> Mapping[str, Any]:
@@ -911,7 +910,7 @@ def _hf_to_fms_names(input_sd: Mapping[str, Any], **kwargs) -> Mapping[str, Any]
     return new_sd
 
 
-serialization.register_adapter_step("llama", "hf_to_fms_names", _hf_to_fms_names)
+serialization.register_adapter_step("llama_yoco", "hf_to_fms_names", _hf_to_fms_names)
 
 
 def _get_rope_params(linear_type: str) -> list[str]:
@@ -986,11 +985,11 @@ def _hf_to_fms_rope(
     return new_sd
 
 
-serialization.register_adapter_step("llama", "hf_to_fms_rope", _hf_to_fms_rope)
+serialization.register_adapter_step("llama_yoco", "hf_to_fms_rope", _hf_to_fms_rope)
 
-serialization.register_adapter("llama", "meta", ["meta_to_fms_names", "weight_fusion"])
+serialization.register_adapter("llama_yoco", "meta", ["meta_to_fms_names", "weight_fusion"])
 serialization.register_adapter(
-    "llama",
+    "llama_yoco",
     "hf",
     [
         "hf_to_fms_names",
@@ -1000,7 +999,7 @@ serialization.register_adapter(
     ],
 )
 serialization.register_adapter(
-    "llama",
+    "llama_yoco",
     "fms.pre0.0.6",
     ["pre0.0.6_attn_unfused_to_fused", "swiglu_unfused_to_fused", "weight_fusion"],
 )
