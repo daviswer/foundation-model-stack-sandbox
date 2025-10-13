@@ -135,7 +135,7 @@ class LLaMABlock(nn.Module):
         # first we do MHA and Add&Norm
         residual = x
         x = self.ln(x)
-        x = self.attn(
+        x, mask = self.attn(
             q=x,
             position_ids=position_ids,
             past_key_value_state=self_attn_past_key_value,
@@ -162,7 +162,7 @@ class LLaMABlock(nn.Module):
         if use_cache:
             return (x, cache)
         else:
-            return x
+            return (x, mask)
 
 
 class LLaMA(nn.Module):
@@ -351,9 +351,10 @@ class LLaMA(nn.Module):
 
         # this is the output cache for all the decoder layers
         present_key_value_states = []
+        masks = []
 
         for i, layer in enumerate(self.layers):
-            output = layer(
+            output, mask = layer(
                 x=x_in,
                 position_ids=position_ids,
                 past_key_value_state=past_key_value_states[i],
@@ -367,13 +368,14 @@ class LLaMA(nn.Module):
 
             else:
                 x_in = output
+                masks.append(mask)
 
         dec_out = x_in
         dec_out = self.dec_norm(dec_out)
         if self.config.p_dropout:
             dec_out = self.dropout(dec_out)
 
-        return dec_out, present_key_value_states
+        return dec_out, present_key_value_states, masks
 
     def forward(
         self,
@@ -390,7 +392,7 @@ class LLaMA(nn.Module):
         #     past_key_value_states=past_key_value_states,
         #     **attn_kwargs,
         # )
-        output, cache = self._helper(
+        output, cache, masks = self._helper(
             x, position_ids, past_key_value_states, use_cache, **attn_kwargs
         )
 
@@ -401,7 +403,7 @@ class LLaMA(nn.Module):
         if use_cache:
             return preds, cache
         else:
-            return preds
+            return preds, masks
 
 
 # Register common LLaMA variants with the model registration API
