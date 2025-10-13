@@ -660,7 +660,7 @@ class MultiHeadAttention(nn.Module):
         if use_cache:
             return out, (keys, values, rates, affs)
         else:
-            return out
+            return out, mask.detach().bfloat16()
 
     @torch.compile
     def _gen_affinity_scores(self, k, src, dest, r):
