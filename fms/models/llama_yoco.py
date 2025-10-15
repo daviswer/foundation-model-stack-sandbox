@@ -98,10 +98,19 @@ class SlidingWindowAttention(nn.Module):
         # self.k_proj = ColumnParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, gather_output=False, init_method=init_method)
         # self.v_proj = ColumnParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, gather_output=False, init_method=init_method)
         # self.out_proj = RowParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, input_is_parallel=True, init_method=init_method)
+        self.use_bias = False  # [CL] hard-coded for now.
         self.q_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
         self.k_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
         self.v_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
         self.out_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
+
+    def reset_parameters(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.trunc_normal_(m.weight, mean=0.0, std=0.02)
+                if self.use_bias:
+                    m.bias.data.zero_()
+            # also assume non-Fused QKV
 
     def forward(
         self,
@@ -158,8 +167,16 @@ class CrossAttention(nn.Module):
         self.head_dim = cfg.emb_dim // cfg.nheads
         # self.q_proj = ColumnParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, gather_output=False, init_method=init_method)
         # self.out_proj = RowParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, input_is_parallel=True, init_method=init_method)
+        self.use_bias = False  # [CL] hard-coded for now.
         self.q_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
         self.out_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
+
+    def reset_parameters(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.trunc_normal_(m.weight, mean=0.0, std=0.02)
+                if self.use_bias:
+                    m.bias.data.zero_()
 
     def forward(
         self,
@@ -462,9 +479,15 @@ class CrossDecoder(nn.Module):
 
 
 class LLaMAHeadlessYOCO(LLaMAHeadless):
-    """Replace [LlamaBlock * n] with 2 new (borrowed) classes [SelfDecoder + CrossDecoder]
+    """Inherit fms LLaMAHeadless, override:
+     1. init()
+        to replace [LlamaBlock * n] with 2 new (borrowed) classes [SelfDecoder + CrossDecoder]
         where SelfDecoder has [(modifiedLlamaBlock)* n//2]
         where CrossDecoder has [(modifiedLlamaBlock)* n//2]
+     2. forward()
+        to invoke self_decoder and cross_decoder
+     3. reset_parameters()
+        to include the new Attention classes 
     """
     def __init__(
         self,
@@ -543,6 +566,16 @@ class LLaMAHeadlessYOCO(LLaMAHeadless):
         if self.config.p_dropout:
             self.dropout = nn.Dropout(self.config.p_dropout)
 
+    def reset_parameters(self):
+        """
+        Call the original reset_parameters() and then the same func in the new attention
+        classes in YOCOLlama.
+        """
+        super().reset_parameters()
+
+        for m in self.modules():
+            if isinstance(m, (SlidingWindowAttention, CrossAttention)):
+                m.reset_parameters()
 
     def forward(
         self,
