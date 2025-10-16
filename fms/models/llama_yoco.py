@@ -604,6 +604,8 @@ class LLaMAHeadlessYOCO(LLaMAHeadless):
             # NOTE 1. let SelfDecoder.SlidingWindowAttn do the init of the cache
             #      2. different data structure, i.e. list vs dict, need to reconcile
         x_in = self.embedding(x_in)
+        if rank==0:
+            print("    Embedding:", x_in.mean().item(), x_in.std().item())
 
         # this is the output cache for all the decoder layers
         present_key_value_states = []
