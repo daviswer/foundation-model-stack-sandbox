@@ -151,7 +151,7 @@ class SlidingWindowAttention(nn.Module):
             key, value = k, v
 
         if rank==0:
-            print("    Sliding window:", q.shape, key.shape)
+            print("    Sliding window:", q.mean().item(), q.std().item())
         attn = flash_attn_func(q, key, value, causal=True, window_size=(self.window_size - 1, 0)) 
         attn = attn.reshape(bsz, tgt_len, self.head_dim * self.num_heads)
 
@@ -195,7 +195,7 @@ class CrossAttention(nn.Module):
         q = apply_rotary_emb(q, *rel_pos, interleaved=True)
 
         if rank==0:
-            print("    Cross attention:", q.shape, key.shape)
+            print("    Cross attention:", q.mean().item(), q.std().item())
         attn = flash_attn_func(q, key, value, causal=True)
         attn = attn.view(bsz, tgt_len, self.head_dim * self.num_heads)
 
@@ -314,8 +314,6 @@ class LLaMABlockYOCO(nn.Module):
                 incremental_state=incremental_state,
             )
         else:
-            if rank==0:
-                print("ALERT: MHA")
             # original MHA
             x = self.attn(
                 q=x,
@@ -472,7 +470,7 @@ class CrossDecoder(nn.Module):
             key = incremental_state["prev_key"][:, : start_pos + seqlen]
             value = incremental_state["prev_value"][:, : start_pos + seqlen]
             if rank==0:
-                print("    Got the persistent cache:", key.shape, value.shape)
+                print("    Got the persistent cache:", key.mean().item(), key.std().item())
         
         if skip_cross_decoder:
             return torch.zeros(bsz, 1, embed_dim, device=x.device, dtype=x.dtype)
