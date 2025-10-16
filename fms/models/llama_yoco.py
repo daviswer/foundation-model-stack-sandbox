@@ -7,6 +7,7 @@ from typing_extensions import Unpack
 
 import torch
 import torch.nn as nn
+from flash_attn import flash_attn_func
 
 from fms import models
 from fms.distributed.strategy import (
@@ -22,12 +23,21 @@ from fms.modules.attention import (
 from fms.modules.feedforward import GatedLinearUnit
 from fms.modules.head import LinearClassificationHead
 from fms.modules.layernorm import LayerNormParameterized
-from fms.modules.linear import get_linear_type
+from fms.modules.linear import get_linear_type, get_linear
 from fms.modules.positions import RotaryEmbedding
+from fms.modules.yoco_rotary import apply_rotary_emb
 from fms.utils import serialization
 from fms.utils.activation import str_to_activation
 from fms.utils.config import ModelConfig
 from fms.utils.headless import gather_outputs
+
+from .llama import (
+    LLaMAConfig,
+    LLaMAHeadless,
+)
+# [CL] original YOCO import from fairseq.model_parallel.megatron.mpu, 
+#       this package (pip install megatron-core) may be newer
+# from megatron.core.tensor_parallel import ColumnParallelLinear, RowParallelLinear
 
 
 logger = logging.getLogger(__name__)
@@ -40,32 +50,163 @@ logger = logging.getLogger(__name__)
 # 65B    8192    64    80     1.5.E-04
 
 
-@dataclass
-class LLaMAConfig(ModelConfig):
-    src_vocab_size: int = 32_000  # can be set by tokenizer
-    emb_dim: int = 4096
-    norm_eps: float = 1e-5
-    nheads: int = 32
-    kvheads: int = 0
-    nlayers: int = 32
-    pad_id: int = -1
-    hidden_grow_factor: float = 8 / 3
-    multiple_of: int = 256
-    activation_fn: str = "swish"
-    p_dropout: float = 0.0
-    max_expected_seq_len: int = 4096
-    attn_bias: bool = False
-    mlp_bias: bool = False
-    tie_heads: bool = False
-    rope_theta: float = 10_000.0
-    rope_scaling: dict = field(default_factory=lambda: {})
-    linear_config: Optional[Mapping[str, Any]] = None
-    fused_weights: bool = True
+# --------- codes modified from YOCO repo
+# main changes:
+# 1. ROPE for rel_pos vs abs_pos
+# 2.
+# other minor changes:
+# var names, TP compatibility check, ...
+
+def init_method(tensor, **kwargs):
+    nn.init.kaiming_uniform_(tensor, a=math.sqrt(5))
 
 
-class LLaMABlock(nn.Module):
-    def __init__(self, config: LLaMAConfig, rotary_emb: RotaryEmbedding):
-        super(LLaMABlock, self).__init__()
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6, elementwise_affine=True):
+        super().__init__()
+        self.dim = dim
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+        if self.elementwise_affine:
+            self.weight = nn.Parameter(torch.ones(dim))
+        else:
+            self.register_parameter('weight', None)
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        output = self._norm(x.float()).type_as(x)
+        if self.weight is not None:
+            output = output * self.weight
+        return output
+
+    def extra_repr(self) -> str:
+        return f'dim={self.dim}, eps={self.eps}, elementwise_affine={self.elementwise_affine}'
+
+
+class SlidingWindowAttention(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.embed_dim = cfg.emb_dim
+        self.num_heads = cfg.nheads // getattr(cfg,"model_parallel_size", 1)  # TODO use world size or rank to replace this var
+        self.window_size = cfg.sliding_window  # we set this in LlamaYOCO init already        
+        self.head_dim = cfg.emb_dim // cfg.nheads
+
+        # self.q_proj = ColumnParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, gather_output=False, init_method=init_method)
+        # self.k_proj = ColumnParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, gather_output=False, init_method=init_method)
+        # self.v_proj = ColumnParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, gather_output=False, init_method=init_method)
+        # self.out_proj = RowParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, input_is_parallel=True, init_method=init_method)
+        self.use_bias = False  # [CL] hard-coded for now.
+        self.q_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
+        self.k_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
+        self.v_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
+        self.out_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
+
+    def reset_parameters(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.trunc_normal_(m.weight, mean=0.0, std=0.02)
+                if self.use_bias:
+                    m.bias.data.zero_()
+            # also assume non-Fused QKV
+
+    def forward(
+        self,
+        x,
+        rel_pos,
+        start_pos=0,
+        incremental_state=None,
+    ):
+        bsz, tgt_len, embed_dim = x.size()
+        src_len = tgt_len
+
+        q = self.q_proj(x)
+        k = self.k_proj(x)
+        v = self.v_proj(x)
+
+        q = q.view(bsz, tgt_len, self.num_heads, self.head_dim)
+        k = k.view(bsz, src_len, self.num_heads, self.head_dim)
+        v = v.view(bsz, src_len, self.num_heads, self.head_dim)
+
+        q = apply_rotary_emb(q, *rel_pos, interleaved=True)
+        k = apply_rotary_emb(k, *rel_pos, interleaved=True)
+
+        if incremental_state is not None:
+            if "prev_key" not in incremental_state:
+                incremental_state["prev_key"] = torch.empty(self.cfg.max_batch_size, self.window_size, self.num_heads, self.head_dim, device=x.device, dtype=x.dtype)
+                incremental_state["prev_value"] = torch.empty(self.cfg.max_batch_size, self.window_size, self.num_heads, self.head_dim, device=x.device, dtype=x.dtype)
+
+            key = torch.cat([incremental_state["prev_key"][:bsz, :start_pos], k], dim=1)
+            value = torch.cat([incremental_state["prev_value"][:bsz, :start_pos], v], dim=1)
+            if key.shape[1] > self.window_size:
+                incremental_state["prev_key"][:bsz] = key[:, -self.window_size:]
+                incremental_state["prev_value"][:bsz] = value[:, -self.window_size:]
+            else:
+                incremental_state["prev_key"][:bsz, start_pos : start_pos + tgt_len] = k
+                incremental_state["prev_value"][:bsz, start_pos : start_pos + tgt_len] = v
+        else:
+            key, value = k, v
+
+        attn = flash_attn_func(q, key, value, causal=True, window_size=(self.window_size - 1, 0)) 
+        attn = attn.reshape(bsz, tgt_len, self.head_dim * self.num_heads)
+
+        attn = self.out_proj(attn)
+        return attn
+
+
+class CrossAttention(nn.Module):
+    def __init__(self, cfg,):
+        super().__init__()
+        self.cfg = cfg
+        self.embed_dim = cfg.emb_dim
+        self.num_heads = cfg.nheads // getattr(cfg,"model_parallel_size", 1)
+        self.num_kv_heads = cfg.kvheads // getattr(cfg,"model_parallel_size", 1)
+        
+        self.head_dim = cfg.emb_dim // cfg.nheads
+        # self.q_proj = ColumnParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, gather_output=False, init_method=init_method)
+        # self.out_proj = RowParallelLinear(cfg.emb_dim, cfg.emb_dim, bias=False, input_is_parallel=True, init_method=init_method)
+        self.use_bias = False  # [CL] hard-coded for now.
+        self.q_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
+        self.out_proj = get_linear(cfg.emb_dim, cfg.emb_dim, bias=False, linear_config=cfg.linear_config)
+
+    def reset_parameters(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.trunc_normal_(m.weight, mean=0.0, std=0.02)
+                if self.use_bias:
+                    m.bias.data.zero_()
+
+    def forward(
+        self,
+        x,
+        key,
+        value,
+        rel_pos
+    ):
+        bsz, tgt_len, _ = x.size()
+        
+        q = self.q_proj(x)
+        q = q.view(bsz, tgt_len, self.num_heads, self.head_dim)
+        q = apply_rotary_emb(q, *rel_pos, interleaved=True)
+
+        attn = flash_attn_func(q, key, value, causal=True)
+        attn = attn.view(bsz, tgt_len, self.head_dim * self.num_heads)
+
+        attn = self.out_proj(attn)
+        return attn
+
+
+class LLaMABlockYOCO(nn.Module):
+    """Modified from fms's LLaMABlock based on YOCO's DecoderLayer."""
+    def __init__(
+            self,
+            config: LLaMAConfig,
+            rotary_emb: RotaryEmbedding,
+            attn_type:str = "mha",
+        ):
+        super().__init__()
         self.config = config
         emb_kq = self.config.emb_dim // self.config.nheads
         emb_v = self.config.emb_dim // self.config.nheads
@@ -93,18 +234,25 @@ class LLaMABlock(nn.Module):
             kvheads = self.config.kvheads
             assert self.config.nheads % self.config.kvheads == 0
 
-        self.attn = MultiHeadAttention(
-            self.config.emb_dim,
-            emb_kq,
-            emb_v,
-            self.config.nheads,
-            kvheads,
-            p_dropout=self.config.p_dropout,
-            use_bias=self.config.attn_bias,
-            position_encoder=rotary_emb,
-            fused=self.config.fused_weights,
-            linear_config=self.config.linear_config,
-        )
+        # modified based on YOCO's DecoderLayer
+        self.attn_type = attn_type
+        if attn_type == "cross_attn":
+            self.attn = CrossAttention(config)
+        elif attn_type in ["sliding_win_attn", "swa"]:
+            self.attn = SlidingWindowAttention(config)
+        else:
+            self.attn = MultiHeadAttention(
+                self.config.emb_dim,
+                emb_kq,
+                emb_v,
+                self.config.nheads,
+                kvheads,
+                p_dropout=self.config.p_dropout,
+                use_bias=self.config.attn_bias,
+                position_encoder=rotary_emb,
+                fused=self.config.fused_weights,
+                linear_config=self.config.linear_config,
+            )
         self.ff_sub_layer = GatedLinearUnit(
             self.config.emb_dim,
             hidden_grow_factor=self.config.hidden_grow_factor,
@@ -126,6 +274,13 @@ class LLaMABlock(nn.Module):
         position_ids=None,
         past_key_value_state=None,
         use_cache=False,
+        # the following 6 are used by YOCO's DecoderLayer ---
+        start_pos=0,
+        key=None,
+        value=None,
+        rel_pos=None,
+        incremental_state=None,
+        is_prefilling=False,
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
         # if the cache is not empty, we need to get the kv cache for self and cross attention
@@ -138,13 +293,30 @@ class LLaMABlock(nn.Module):
         # first we do MHA and Add&Norm
         residual = x
         x = self.ln(x)
-        x = self.attn(
-            q=x,
-            position_ids=position_ids,
-            past_key_value_state=self_attn_past_key_value,
-            use_cache=use_cache,
-            **attn_kwargs,
-        )
+        # [CL] call signature changes with attn_type
+        if self.attn_type == "cross_attn":
+            x = self.attn(
+                x,
+                key,
+                value,
+                rel_pos=rel_pos,
+            )
+        elif self.attn_type in ["sliding_win_attn", "swa"]:
+            x = self.attn(
+                x,
+                rel_pos=rel_pos,
+                start_pos=start_pos,
+                incremental_state=incremental_state,
+            )
+        else:
+            # original MHA
+            x = self.attn(
+                q=x,
+                position_ids=position_ids,
+                past_key_value_state=self_attn_past_key_value,
+                use_cache=use_cache,
+                **attn_kwargs,
+            )
         cache = None
         if use_cache:
             x, cache = x
@@ -168,18 +340,176 @@ class LLaMABlock(nn.Module):
             return x
 
 
-class LLaMAHeadless(nn.Module):
+
+class SelfDecoder(nn.Module):
+    """Modified from YOCO's implementation"""
+    def __init__(
+        self,
+        config: LLaMAConfig,
+        rot_emb: RotaryEmbedding,
+        checkpoint_activations: bool = False
+    ):
+        super().__init__()
+        self.config = config 
+        layers = [LLaMABlockYOCO(config, rot_emb, attn_type="sliding_win_attn",) for idx in range(config.nlayers // 2)]
+        if checkpoint_activations:
+            # layers = [checkpoint_wrapper(layer) for layer in layers]
+            raise NotImplementedError
+        self.layers = nn.ModuleList(layers)
+        self.head_dim = config.emb_dim // config.nheads
+        self.block_size = 256
+        self._precomputed_freqs_cis = None
+
+    def build_rel_pos(self, x, start_pos):
+        if self._precomputed_freqs_cis is None:
+            angle = 1.0 / (self.config.rope_theta ** torch.linspace(0, 1, self.head_dim // 2, dtype=torch.float, device=x.device))
+            index = torch.arange(self.config. max_expected_seq_len).to(angle)
+            self._precomputed_freqs_cis = index[:, None] * angle
+
+        cos = torch.cos(self._precomputed_freqs_cis[start_pos:start_pos+x.size(1)])
+        sin = torch.sin(self._precomputed_freqs_cis[start_pos:start_pos+x.size(1)])
+        rel_pos = (cos.to(x.dtype), sin.to(x.dtype))
+        return rel_pos
+
+    def get_index_mask(self, x, length, pad_length):
+        return torch.arange(pad_length, device=x.device) >= length
+
+    def forward(
+        self,
+        x,
+        incremental_state=None,
+        is_prefilling=False,
+        start_pos=0
+    ):
+        if is_prefilling and x.size(1) % self.block_size != 0 and self.config.sliding_window is None:
+            padding_len = self.block_size - x.size(1) % self.block_size
+            x = torch.nn.functional.pad(x, (0, 0, 0, padding_len), value=0)
+        else:
+            padding_len = 0
+
+        if incremental_state is not None and is_prefilling:
+            index_mask = self.get_index_mask(x, x.size(1) - padding_len, x.size(1))
+
+        rel_pos = self.build_rel_pos(x, start_pos)
+        for idx, layer in enumerate(self.layers):
+            if incremental_state is not None:
+                if idx not in incremental_state:
+                    incremental_state[idx] = {}
+                if is_prefilling:
+                    incremental_state[idx]["index_mask"] = index_mask
+            x = layer(
+                x,
+                start_pos=start_pos,
+                rel_pos=rel_pos,
+                incremental_state=incremental_state[idx] if incremental_state is not None else None,
+                is_prefilling=is_prefilling,)
+
+        x = x[:, :x.size(1) - padding_len, :]
+        return x
+
+class CrossDecoder(nn.Module):
+    """Modified from YOCO's implementation"""
+    def __init__(
+        self,
+        config: LLaMAConfig,
+        rot_emb: RotaryEmbedding,
+        checkpoint_activations: bool = False
+    ):
+        super().__init__()
+        self.config = config
+        self.num_heads = config.kvheads
+        self.head_dim = config.emb_dim // config.nheads
+        # self.k_proj = ColumnParallelLinear(config.emb_dim, self.head_dim * config.kvheads, bias=False, gather_output=False, init_method=init_method)
+        # self.v_proj = ColumnParallelLinear(config.emb_dim, self.head_dim * config.kvheads, bias=False, gather_output=False, init_method=init_method)
+        self.k_proj = get_linear(config.emb_dim, self.head_dim * config.kvheads, bias=False, linear_config=config.linear_config)
+        self.v_proj = get_linear(config.emb_dim, self.head_dim * config.kvheads, bias=False, linear_config=config.linear_config)
+        self.kv_layer_norm = RMSNorm(config.emb_dim, eps=config.norm_eps)
+        layers = [LLaMABlockYOCO(config, rot_emb, attn_type="cross_attn") for idx in range(config.nlayers // 2)]
+        # if checkpoint_activations:
+        #     layers = [checkpoint_wrapper(layer) for layer in layers]
+        self.layers = nn.ModuleList(layers)
+        self._precomputed_freqs_cis = None
+
+    def build_rel_pos(self, x, start_pos):
+        if self._precomputed_freqs_cis is None:
+            angle = 1.0 / (self.config.rope_theta ** torch.linspace(0, 1, self.head_dim // 2, dtype=torch.float, device=x.device))
+            index = torch.arange(self.config.max_expected_seq_len).to(angle)
+            self._precomputed_freqs_cis = index[:, None] * angle
+
+        cos = torch.cos(self._precomputed_freqs_cis[start_pos:start_pos+x.size(1)])
+        sin = torch.sin(self._precomputed_freqs_cis[start_pos:start_pos+x.size(1)])
+        rel_pos = (cos.to(x.dtype), sin.to(x.dtype))
+        return rel_pos
+
+    def forward(
+        self,
+        x,
+        incremental_state=None,
+        start_pos=0,
+        skip_cross_decoder=False,
+    ):
+        bsz, seqlen, embed_dim = x.size()
+        x_norm = self.kv_layer_norm(x)
+        key, value = self.k_proj(x_norm), self.v_proj(x_norm)
+        key = key.view(bsz, seqlen, self.num_heads, self.head_dim)
+        value = value.view(bsz, seqlen, self.num_heads, self.head_dim)
+        rel_pos = self.build_rel_pos(x, start_pos)
+        key = apply_rotary_emb(key, *rel_pos, interleaved=True)
+
+        if incremental_state is not None:
+            if "prev_key" not in incremental_state:
+                incremental_state["prev_key"] = torch.empty(bsz, self.config.max_expected_seq_len, self.num_heads, self.head_dim, device=x.device, dtype=x.dtype)
+                incremental_state["prev_value"] = torch.empty(bsz, self.config.max_expected_seq_len, self.num_heads, self.head_dim, device=x.device, dtype=x.dtype)
+            incremental_state["prev_key"][:, start_pos : start_pos + seqlen] = key
+            incremental_state["prev_value"][:, start_pos : start_pos + seqlen] = value
+            key = incremental_state["prev_key"][:, : start_pos + seqlen]
+            value = incremental_state["prev_value"][:, : start_pos + seqlen]
+        
+        if skip_cross_decoder:
+            return torch.zeros(bsz, 1, embed_dim, device=x.device, dtype=x.dtype)
+        for layer in self.layers:
+            x = layer(
+                x,
+                key=key,
+                value=value,
+                rel_pos=rel_pos)
+
+        return x
+# end of codes modified from YOCO --------- 
+
+
+class LLaMAHeadlessYOCO(LLaMAHeadless):
+    """Inherit fms LLaMAHeadless, override:
+     1. init()
+        to replace [LlamaBlock * n] with 2 new (borrowed) classes [SelfDecoder + CrossDecoder]
+        where SelfDecoder has [(modifiedLlamaBlock)* n//2]
+        where CrossDecoder has [(modifiedLlamaBlock)* n//2]
+     2. forward()
+        to invoke self_decoder and cross_decoder
+     3. reset_parameters()
+        to include the new Attention classes 
+    """
     def __init__(
         self,
         config: Optional[LLaMAConfig] = None,
         distributed_strategy: DistributedStrategy = NoOpStrategy,
         **kwargs,
     ):
-        super(LLaMAHeadless, self).__init__()
+        super().__init__()
+        delattr(self, "layers")
+        # NOTE super.init will have created all the Llama layers already. Among which, we will not
+        # need the original .layers, i.e. the modList of transformer blocks.
+
+        # [CL] make sure YOCO specific defaults exists, values based on YOCO paper/repo
+        config.sliding_window = getattr(config, "sliding_window", 1024)  # 1st line on page 8 of the paper
+        config.max_batch_size = getattr(config, "batch_size", 8)
+        # print(config)
+
         if config is not None:
             self.config = config
         else:
             self.config = LLaMAConfig()
+
         self.config = self.config.updated(**kwargs)
         self.distributed_strategy = distributed_strategy
 
@@ -212,12 +542,14 @@ class LLaMAHeadless(nn.Module):
         ):
             self.rot_emb.compute_freqs_cis(device, self.config.max_expected_seq_len)
 
-        layers = []
-        for i in range(self.config.nlayers):
-            block: nn.Module = LLaMABlock(self.config, self.rot_emb)
-            block = self.distributed_strategy.distribute_layer(block, i)
-            layers.append(block)
-        self.layers = nn.ModuleList(layers)
+        # layers = []
+        # for i in range(self.config.nlayers):
+        #     block: nn.Module = LLaMABlock(self.config, self.rot_emb)
+        #     block = self.distributed_strategy.distribute_layer(block, i)
+        #     layers.append(block)
+        # self.layers = nn.ModuleList(layers)
+        self.self_decoder = SelfDecoder(config, self.rot_emb)
+        self.cross_decoder = CrossDecoder(config, self.rot_emb)
 
         dec_norm = LayerNormParameterized(
             self.config.emb_dim,
@@ -234,99 +566,16 @@ class LLaMAHeadless(nn.Module):
         if self.config.p_dropout:
             self.dropout = nn.Dropout(self.config.p_dropout)
 
-    def get_config(self) -> LLaMAConfig:
-        return self.config
-
-    @classmethod
-    def from_config(cls, config: LLaMAConfig) -> "LLaMAHeadless":
-        return cls(config)
-
     def reset_parameters(self):
-        assert isinstance(self.embedding, torch.nn.Embedding)
-        nn.init.trunc_normal_(
-            self.embedding.weight, mean=0.0, std=self.config.emb_dim**-0.5
-        )
+        """
+        Call the original reset_parameters() and then the same func in the new attention
+        classes in YOCOLlama.
+        """
+        super().reset_parameters()
 
-        # RoPE init
-        for device in set(
-            [param.device for param in self.parameters()]
-            + [buffer.device for buffer in self.buffers()]
-        ):
-            self.rot_emb.compute_freqs_cis(device, self.config.max_expected_seq_len)
-
-        # Call reset_parameters for relevant sub-layers
         for m in self.modules():
-            if (
-                isinstance(m, MultiHeadAttention)
-                or isinstance(m, GatedLinearUnit)
-                or isinstance(m, LayerNormParameterized)
-            ):
+            if isinstance(m, (SlidingWindowAttention, CrossAttention)):
                 m.reset_parameters()
-
-    def validate_reset_parameters(self):
-        # Verifies that the above self.reset_parameters() executed correctly.
-        # This may not always be the case for distributed settings with sharded tensors,
-        # such as FSDP or TP. Note that performing this check may require unsharding /
-        # re-materializing the full model on a single rank to access the underlying tensors.
-        tolerance = 1e-3
-
-        def check_close(x):
-            assert x.mean().abs() < tolerance
-            assert x.std().sub(0.02).abs() < tolerance
-
-        with torch.no_grad():
-            for p in self.parameters():
-                assert p.isnan().int().sum() == 0
-                assert p.isinf().int().sum() == 0
-            for m in self.modules():
-                if isinstance(m, LayerNormParameterized):
-                    if m.elementwise_scale:
-                        assert m.weight.sum() == m.weight.numel()
-                    if m.elementwise_shift:
-                        assert m.bias.add(1).sum() == m.bias.numel()
-                elif isinstance(m, nn.Embedding):
-                    check_close(m.weight)
-                elif isinstance(m, GatedLinearUnit):
-                    check_close(m.w1.weight)
-                    check_close(m.w2.weight)
-                    check_close(m.wg.weight)
-                elif isinstance(m, MultiHeadAttention):
-                    if m.fused:
-                        check_close(m.in_proj.qkv_fused.weight)
-                    else:
-                        check_close(m.in_proj.query.weight)
-                        check_close(m.in_proj.key.weight)
-                        check_close(m.in_proj.value.weight)
-                    check_close(m.dense.weight)
-
-    def _clean_up_rot_emb_cache(
-        self,
-        cached_freqs: dict[Optional[torch.device], dict[int, torch.Tensor]],
-        max_seq_len_cached: dict[Optional[torch.device], int],
-    ):
-        # remove meta tensors from cached_freqs
-        for dev in list(cached_freqs.keys()):
-            for alp in list(cached_freqs[dev].keys()):
-                if cached_freqs[dev][alp].device == torch.device("meta"):
-                    del cached_freqs[dev][alp]
-                    if len(cached_freqs[dev]) == 0:
-                        del cached_freqs[dev]
-                        del max_seq_len_cached[dev]
-
-    def post_init(self):
-        # This function is called in `get_model` after the model is
-        # fully initalized on the correct device
-        self._clean_up_rot_emb_cache(
-            self.rot_emb.cached_freqs,
-            self.rot_emb.max_seq_len_cached,
-        )
-
-        # init RoPE on the right device(s)
-        for device in set(
-            [param.device for param in self.parameters()]
-            + [buffer.device for buffer in self.buffers()]
-        ):
-            self.rot_emb.compute_freqs_cis(device, self.config.max_expected_seq_len)
 
     def forward(
         self,
@@ -334,6 +583,8 @@ class LLaMAHeadless(nn.Module):
         position_ids=None,
         past_key_value_states=None,
         use_cache=False,
+        start_pos=0,  # TODO calc start_pos from pos_ids?
+        skip_cross_decoder=False,
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
         # Embed the given vocabulary indices using the given attention mask, with pre-/post-norm and dropout as specified
@@ -341,26 +592,33 @@ class LLaMAHeadless(nn.Module):
         # mask: batch_size x seq_len x seq_len
         # bias: nheads x seq_len x seq_len
         if past_key_value_states is None or len(past_key_value_states) == 0:
-            past_key_value_states = [None for _ in range(len(self.layers))]
+            # past_key_value_states = [None for _ in range(len(self.layers))]
+            past_key_value_states = {}
+            # NOTE 1. let SelfDecoder.SlidingWindowAttn do the init of the cache
+            #      2. different data structure, i.e. list vs dict, need to reconcile
         x_in = self.embedding(x_in)
 
         # this is the output cache for all the decoder layers
         present_key_value_states = []
 
-        for i, layer in enumerate(self.layers):
-            output = layer(
-                x=x_in,
-                position_ids=position_ids,
-                past_key_value_state=past_key_value_states[i],
-                use_cache=use_cache,
-                **attn_kwargs,
-            )
+        # [CL] the following checks was in fms llama's MHA class, but could (should) be
+        #       checked at upper level, hence, moved here
+        attn_compute_dict = get_attention_type(**attn_kwargs)
+        is_prefilling = attn_compute_dict["is_prefill"](**attn_kwargs)
 
-            if use_cache:
-                x_in, present_key_value_state = output
-                present_key_value_states.append(present_key_value_state)
-            else:
-                x_in = output
+        x_in = self.self_decoder(
+            x_in,
+            incremental_state=past_key_value_states,
+            is_prefilling=is_prefilling,
+            start_pos=start_pos,
+        )
+
+        x_in = self.cross_decoder(
+            x_in,
+            start_pos=start_pos,
+            incremental_state=past_key_value_states,
+            skip_cross_decoder=skip_cross_decoder,
+        )
 
         dec_out = x_in
         dec_out = self.dec_norm(dec_out)
@@ -371,6 +629,7 @@ class LLaMAHeadless(nn.Module):
 
 
 class LLaMA(nn.Module):
+    """Only change self.base_model to LLaMAHeadlessYOCO, rest unchanged."""
     def __init__(
         self,
         config: Optional[LLaMAConfig] = None,
@@ -385,7 +644,7 @@ class LLaMA(nn.Module):
         self.config = self.config.updated(**kwargs)
         self.distributed_strategy = distributed_strategy
 
-        self.base_model = LLaMAHeadless(self.config, self.distributed_strategy)
+        self.base_model = LLaMAHeadlessYOCO(self.config, self.distributed_strategy)
         head = LinearClassificationHead(
             self.config.emb_dim, self.config.src_vocab_size, bias=False
         )
@@ -537,7 +796,7 @@ _granite_8b_code_config = LLaMAConfig(
     tie_heads=True,
 )
 
-_architecture_name = "llama"
+_architecture_name = "llama_yoco"
 
 
 def _llama_factory_factory(config):
@@ -583,11 +842,11 @@ models.register_model(
 
 # Create all the pieces to generate adapters for different checkpoints
 serialization.register_adapter_step(
-    "llama", "pre0.0.6_attn_unfused_to_fused", serialization._pre006_attn_adapter_step
+    "llama_yoco", "pre0.0.6_attn_unfused_to_fused", serialization._pre006_attn_adapter_step
 )
 
 serialization.register_adapter_step(
-    "llama",
+    "llama_yoco",
     "swiglu_unfused_to_fused",
     serialization._mlp_glu_unfused_to_fused_adapter_step,
 )
@@ -609,7 +868,7 @@ def _weight_fusion(
     return new_sd
 
 
-serialization.register_adapter_step("llama", "weight_fusion", _weight_fusion)
+serialization.register_adapter_step("llama_yoco", "weight_fusion", _weight_fusion)
 
 
 def _hf_gptq_llama_check(
@@ -632,7 +891,7 @@ def _hf_gptq_llama_check(
 
 
 serialization.register_adapter_step(
-    "llama", "hf_gptq_fusion_check", _hf_gptq_llama_check
+    "llama_yoco", "hf_gptq_fusion_check", _hf_gptq_llama_check
 )
 
 
@@ -663,7 +922,7 @@ def _meta_to_fms_names(input_sd: Mapping[str, Any], **kwargs) -> Mapping[str, An
     return new_sd
 
 
-serialization.register_adapter_step("llama", "meta_to_fms_names", _meta_to_fms_names)
+serialization.register_adapter_step("llama_yoco", "meta_to_fms_names", _meta_to_fms_names)
 
 
 def _hf_to_fms_names(input_sd: Mapping[str, Any], **kwargs) -> Mapping[str, Any]:
@@ -691,7 +950,7 @@ def _hf_to_fms_names(input_sd: Mapping[str, Any], **kwargs) -> Mapping[str, Any]
     return new_sd
 
 
-serialization.register_adapter_step("llama", "hf_to_fms_names", _hf_to_fms_names)
+serialization.register_adapter_step("llama_yoco", "hf_to_fms_names", _hf_to_fms_names)
 
 
 def _get_rope_params(linear_type: str) -> list[str]:
@@ -766,11 +1025,11 @@ def _hf_to_fms_rope(
     return new_sd
 
 
-serialization.register_adapter_step("llama", "hf_to_fms_rope", _hf_to_fms_rope)
+serialization.register_adapter_step("llama_yoco", "hf_to_fms_rope", _hf_to_fms_rope)
 
-serialization.register_adapter("llama", "meta", ["meta_to_fms_names", "weight_fusion"])
+serialization.register_adapter("llama_yoco", "meta", ["meta_to_fms_names", "weight_fusion"])
 serialization.register_adapter(
-    "llama",
+    "llama_yoco",
     "hf",
     [
         "hf_to_fms_names",
@@ -780,7 +1039,7 @@ serialization.register_adapter(
     ],
 )
 serialization.register_adapter(
-    "llama",
+    "llama_yoco",
     "fms.pre0.0.6",
     ["pre0.0.6_attn_unfused_to_fused", "swiglu_unfused_to_fused", "weight_fusion"],
 )
