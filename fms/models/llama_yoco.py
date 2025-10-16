@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Tuple
@@ -41,7 +42,7 @@ from .llama import (
 
 
 logger = logging.getLogger(__name__)
-
+rank = int(os.environ["RANK"])
 
 # params emb_dim heads layers lr
 #  7B    4096    32    32     3.0E-04
@@ -149,6 +150,8 @@ class SlidingWindowAttention(nn.Module):
         else:
             key, value = k, v
 
+        if rank==0:
+            print("    Sliding window:", q.shape, key.shape)
         attn = flash_attn_func(q, key, value, causal=True, window_size=(self.window_size - 1, 0)) 
         attn = attn.reshape(bsz, tgt_len, self.head_dim * self.num_heads)
 
@@ -191,6 +194,8 @@ class CrossAttention(nn.Module):
         q = q.view(bsz, tgt_len, self.num_heads, self.head_dim)
         q = apply_rotary_emb(q, *rel_pos, interleaved=True)
 
+        if rank==0:
+            print("    Cross attention:", q.shape, key.shape)
         attn = flash_attn_func(q, key, value, causal=True)
         attn = attn.view(bsz, tgt_len, self.head_dim * self.num_heads)
 
@@ -309,6 +314,8 @@ class LLaMABlockYOCO(nn.Module):
                 incremental_state=incremental_state,
             )
         else:
+            if rank==0:
+                print("ALERT: MHA")
             # original MHA
             x = self.attn(
                 q=x,
@@ -464,6 +471,8 @@ class CrossDecoder(nn.Module):
             incremental_state["prev_value"][:, start_pos : start_pos + seqlen] = value
             key = incremental_state["prev_key"][:, : start_pos + seqlen]
             value = incremental_state["prev_value"][:, : start_pos + seqlen]
+            if rank==0:
+                print("    Got the persistent cache:", key.shape, value.shape)
         
         if skip_cross_decoder:
             return torch.zeros(bsz, 1, embed_dim, device=x.device, dtype=x.dtype)
@@ -723,6 +732,8 @@ class LLaMA(nn.Module):
 
         output = gather_outputs(output, last_n_tokens, **attn_kwargs)
         preds = self.head(output)
+        if rank==0:
+            print("Final output:", preds.mean().item(), preds.std().item(), preds.min().item(), preds.max().item())
 
         if use_cache:
             return preds, cache
