@@ -584,7 +584,6 @@ class LLaMAHeadlessYOCO(LLaMAHeadless):
         past_key_value_states=None,
         use_cache=False,
         start_pos=0,  # TODO calc start_pos from pos_ids?
-        is_prefilling=True,
         skip_cross_decoder=False,
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
@@ -594,11 +593,18 @@ class LLaMAHeadlessYOCO(LLaMAHeadless):
         # bias: nheads x seq_len x seq_len
         if past_key_value_states is None or len(past_key_value_states) == 0:
             # past_key_value_states = [None for _ in range(len(self.layers))]
-            past_key_value_states = {}  # let SelfDecoder.SlidingWindowAttn do the init of states
+            past_key_value_states = {}
+            # NOTE 1. let SelfDecoder.SlidingWindowAttn do the init of the cache
+            #      2. different data structure, i.e. list vs dict, need to reconcile
         x_in = self.embedding(x_in)
 
         # this is the output cache for all the decoder layers
         present_key_value_states = []
+
+        # [CL] the following checks was in fms llama's MHA class, but could (should) be
+        #       checked at upper level, hence, moved here
+        attn_compute_dict = get_attention_type(**attn_kwargs)
+        is_prefilling = attn_compute_dict["is_prefill"](**attn_kwargs)
 
         x_in = self.self_decoder(
             x_in,
