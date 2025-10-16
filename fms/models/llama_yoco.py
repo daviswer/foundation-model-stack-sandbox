@@ -150,8 +150,8 @@ class SlidingWindowAttention(nn.Module):
         else:
             key, value = k, v
 
-        if rank==0:
-            print("    Sliding window:", q.mean().item(), q.std().item())
+        # if rank==0:
+        #     print("    Sliding window:", q.mean().item(), q.std().item())
         attn = flash_attn_func(q, key, value, causal=True, window_size=(self.window_size - 1, 0)) 
         attn = attn.reshape(bsz, tgt_len, self.head_dim * self.num_heads)
 
@@ -194,8 +194,8 @@ class CrossAttention(nn.Module):
         q = q.view(bsz, tgt_len, self.num_heads, self.head_dim)
         q = apply_rotary_emb(q, *rel_pos, interleaved=True)
 
-        if rank==0:
-            print("    Cross attention:", q.mean().item(), q.std().item())
+        # if rank==0:
+        #     print("    Cross attention:", q.mean().item(), q.std().item())
         attn = flash_attn_func(q, key, value, causal=True)
         attn = attn.view(bsz, tgt_len, self.head_dim * self.num_heads)
 
@@ -469,8 +469,8 @@ class CrossDecoder(nn.Module):
             incremental_state["prev_value"][:, start_pos : start_pos + seqlen] = value
             key = incremental_state["prev_key"][:, : start_pos + seqlen]
             value = incremental_state["prev_value"][:, : start_pos + seqlen]
-            if rank==0:
-                print("    Got the persistent cache:", key.mean().item(), key.std().item())
+            # if rank==0:
+            #     print("    Got the persistent cache:", key.mean().item(), key.std().item())
         
         if skip_cross_decoder:
             return torch.zeros(bsz, 1, embed_dim, device=x.device, dtype=x.dtype)
@@ -604,8 +604,8 @@ class LLaMAHeadlessYOCO(LLaMAHeadless):
             # NOTE 1. let SelfDecoder.SlidingWindowAttn do the init of the cache
             #      2. different data structure, i.e. list vs dict, need to reconcile
         x_in = self.embedding(x_in)
-        if rank==0:
-            print("    Embedding:", x_in.mean().item(), x_in.std().item())
+        # if rank==0:
+        #     print("    Embedding:", x_in.mean().item(), x_in.std().item())
 
         # this is the output cache for all the decoder layers
         present_key_value_states = []
@@ -732,8 +732,8 @@ class LLaMA(nn.Module):
 
         output = gather_outputs(output, last_n_tokens, **attn_kwargs)
         preds = self.head(output)
-        if rank==0:
-            print("Final output:", preds.mean().item(), preds.std().item(), preds.min().item(), preds.max().item())
+        # if rank==0:
+        #     print("Final output:", preds.mean().item(), preds.std().item(), preds.min().item(), preds.max().item())
 
         if use_cache:
             return preds, cache
