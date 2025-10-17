@@ -58,6 +58,7 @@ class LLaMAConfig(ModelConfig):
     rope_partial: float = 1.0
     linear_config: Optional[Mapping[str, Any]] = None
     fused_weights: bool = True
+    sparsity: float = .1
 
 
 class LLaMABlock(nn.Module):
@@ -145,6 +146,8 @@ class LLaMABlock(nn.Module):
         cache = None
         if use_cache:
             x, cache = x
+        else:
+            x, aux = x
         if self.config.p_dropout != 0:
             x = self.dropout(x)
         # residual connection
@@ -162,7 +165,7 @@ class LLaMABlock(nn.Module):
         if use_cache:
             return (x, cache)
         else:
-            return x
+            return (x, aux)
 
 
 class LLaMA(nn.Module):
@@ -361,12 +364,9 @@ class LLaMA(nn.Module):
                 **attn_kwargs,
             )
 
-            if use_cache:
-                x_in, present_key_value_state = output
-                present_key_value_states.append(present_key_value_state)
-
-            else:
-                x_in = output
+            # if not use_cache, stick aux values into present_k_v_state
+            x_in, present_key_value_state = output
+            present_key_value_states.append(present_key_value_state)
 
         dec_out = x_in
         dec_out = self.dec_norm(dec_out)
@@ -401,7 +401,7 @@ class LLaMA(nn.Module):
         if use_cache:
             return preds, cache
         else:
-            return preds
+            return preds, sum(cache).div(len(cache)).sub(self.config.sparsity).pow(2).mean()
 
 
 # Register common LLaMA variants with the model registration API
