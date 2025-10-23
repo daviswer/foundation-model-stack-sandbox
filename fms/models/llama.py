@@ -402,8 +402,8 @@ class LLaMA(nn.Module):
             return preds, cache
         else:
             x = sum(cache).div(len(cache))
-            a = self.config.sparsity * -1
-            return preds, x.div(a).add(1e-6).log().mul(a).sub((1-x).div(1+a).add(1e-6).log().mul(1+a)).mean()
+            a = self.config.sparsity
+            return preds, x.div(a).add(1e-6).log().mul(a).neg().sub((1-x).div(1-a).add(1e-6).log().mul(1-a)).mean()
 
 
 # Register common LLaMA variants with the model registration API
