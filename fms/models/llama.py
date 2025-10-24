@@ -352,7 +352,7 @@ class LLaMAHeadless(nn.Module):
             layers.append(block)
         self.layers = nn.ModuleList(layers)
 
-        decoder = nn.ModuleList([
+        self.decoder = nn.ModuleList([
             MergeMLP(self.config.emb_dim),
             DecoderBlock(self.config, self.rot_emb),
             DecoderBlock(self.config, self.rot_emb),
