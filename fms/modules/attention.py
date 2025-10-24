@@ -920,9 +920,8 @@ class GatedMultiHeadAttention(nn.Module):
         # b x kvlen x h x ds
         # b x h x kvlen x ds
         # todo: Cross attention (This always is true for now)
-        q_out, g_out, k_out, v_out = self.in_proj(q, k, v)
-        print(q_out.shape, g_out.shape, k_out.shape, v_out.shape)
-
+        q_out, k_out, v_out, g_out = self.in_proj(q, k, v)
+        
         # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
         queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
         keys = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
