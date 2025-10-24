@@ -517,7 +517,7 @@ class GatedQKV(QKV):
             )
 
         # b x h x qlen x ds
-        queries, gates = self.query(q).split(self.split_val)
+        queries, gates = self.query(q).split(self.split_val, dim=-1)
         keys = self.key(k)
         values = self.value(v)
         return queries, keys, values, gates
