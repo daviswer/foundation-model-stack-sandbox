@@ -626,7 +626,7 @@ class LLaMA(nn.Module):
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
         get_attention_type(**attn_kwargs)["validate_attn_kwargs"](
-            input_ids=x,
+            input_ids=g_t,
             position_ids=position_ids,
             past_key_value_states=past_key_value_states,
             **attn_kwargs,
