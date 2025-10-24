@@ -16,6 +16,7 @@ from fms.distributed.strategy import (
 )
 from fms.modules.attention import (
     AttentionKwargs,
+    GatedMultiHeadAttention,
     MultiHeadAttention,
     get_attention_type,
 )
@@ -61,6 +62,138 @@ class LLaMAConfig(ModelConfig):
     rope_scaling: dict = field(default_factory=lambda: {})
     linear_config: Optional[Mapping[str, Any]] = None
     fused_weights: bool = True
+
+
+class DecoderBlock(nn.Module):
+    def __init__(self, config: LLaMAConfig, rotary_emb: RotaryEmbedding):
+        super(DecoderBlock, self).__init__()
+        self.config = config
+        emb_kq = self.config.emb_dim // self.config.nheads
+        emb_v = self.config.emb_dim // self.config.nheads
+
+        self.ln = LayerNormParameterized(
+            self.config.emb_dim,
+            elementwise_scale=True,
+            elementwise_shift=False,
+            use_mean=False,
+            eps=self.config.norm_eps,
+            use_high_precision_pow=True,
+        )
+        self.c_ln = LayerNormParameterized(
+            self.config.emb_dim,
+            elementwise_scale=True,
+            elementwise_shift=False,
+            use_mean=False,
+            eps=self.config.norm_eps,
+            use_high_precision_pow=True,
+        )
+
+        if self.config.kvheads == 0:
+            kvheads = self.config.nheads
+        else:
+            kvheads = self.config.kvheads
+            assert self.config.nheads % self.config.kvheads == 0
+
+        self.attn = GatedMultiHeadAttention(
+            self.config.emb_dim,
+            emb_kq,
+            emb_v,
+            self.config.nheads,
+            kvheads,
+            position_encoder=rotary_emb,
+        )
+        self.c_attn = GatedMultiHeadAttention(
+            self.config.emb_dim,
+            emb_kq,
+            emb_v,
+            self.config.nheads,
+            kvheads,
+            position_encoder=rotary_emb,
+        )
+
+        if self.config.p_dropout != 0:
+            self.dropout = nn.Dropout(self.config.p_dropout)
+
+    def forward(
+        self,
+        x,
+        x0,
+        position_ids=None,
+        past_key_value_state=None,
+        use_cache=False,
+        c_mask=None,
+        **attn_kwargs: Unpack[AttentionKwargs],
+    ):
+        # if the cache is not empty, we need to get the kv cache for self and cross attention
+        self_attn_past_key_value = past_key_value_state
+        # if past_key_value_state is not None:
+        #     self_attn_past_key_value = past_key_value_state[:2]
+        # else:
+        #     self_attn_past_key_value = None
+
+        # first we do MHA and Add&Norm
+        residual = x
+        x = self.ln(x)
+        x = self.attn(
+            q=x,
+            position_ids=position_ids,
+            past_key_value_state=self_attn_past_key_value,
+            use_cache=use_cache,
+            **attn_kwargs,
+        )
+        cache = None
+        if use_cache:
+            x, cache = x
+        if self.config.p_dropout != 0:
+            x = self.dropout(x)
+        # residual connection
+        x = x + residual
+
+        # then we do Cross-Attn and Add&Norm
+        residual = x
+        x = self.c_ln(x)
+        x = self.c_attn(
+            q=x,
+            k=x0,
+            v=x0,
+            position_ids=position_ids,
+            past_key_value_state=self_attn_past_key_value,
+            use_cache=use_cache,
+            mask=c_mask,
+        )
+        if self.config.p_dropout != 0:
+            x = self.dropout(x)
+        # another residual
+        x = x + residual
+
+        if use_cache:
+            return (x, cache)
+        else:
+            return x
+        
+
+class MergeMLP(nn.Module):
+    def __init__(self, width):
+        super().__init__()
+        self.in_proj = nn.Linear(width*2, width*2, False)
+        self.out_proj = nn.Linear(width*2, width, False)
+        self.act = nn.SiLU()
+        self.n1 = LayerNormParameterized(width, elementwise_scale=False, elementwise_shift=False)
+        self.n2 = LayerNormParameterized(width, elementwise_scale=False, elementwise_shift=False)
+    
+    def reset_parameters(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.trunc_normal_(m.weight, mean=0.0, std=0.02)
+                if self.use_bias:
+                    m.bias.data.zero_()
+            elif isinstance(m, LayerNormParameterized):
+                m.reset_parameters()
+    
+    def forward(self, x, z):
+        out = torch.cat([self.n1(x), self.n2(z)], dim=-1)
+        out = self.out_proj(self.act(self.in_proj(out)))
+        return out
 
 
 class LLaMABlock(nn.Module):
@@ -219,6 +352,12 @@ class LLaMAHeadless(nn.Module):
             layers.append(block)
         self.layers = nn.ModuleList(layers)
 
+        decoder = nn.ModuleList([
+            MergeMLP(self.config.emb_dim),
+            DecoderBlock(self.config, self.rot_emb),
+            DecoderBlock(self.config, self.rot_emb),
+        ])
+
         dec_norm = LayerNormParameterized(
             self.config.emb_dim,
             elementwise_scale=True,
@@ -258,6 +397,7 @@ class LLaMAHeadless(nn.Module):
         for m in self.modules():
             if (
                 isinstance(m, MultiHeadAttention)
+                or isinstance(m, GatedMultiHeadAttention)
                 or isinstance(m, GatedLinearUnit)
                 or isinstance(m, LayerNormParameterized)
             ):
@@ -330,12 +470,33 @@ class LLaMAHeadless(nn.Module):
 
     def forward(
         self,
-        x_in,
+        g_t,
+        cor,
+        dec,
         position_ids=None,
         past_key_value_states=None,
         use_cache=False,
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
+        n = g_t.size(1)
+        # Construct input sequences and masks
+        x_in = torch.cat([g_t,cor], dim=1)
+        d_in = torch.cat([dec,dec], dim=1)
+        alt_history_mask = torch.zeros(2*n, 2*n, dtype=torch.bool, device=g_t.device)
+        # N 1 Q K
+        block_diag = torch.block_diag(
+            *[torch.ones(128,128, dtype=torch.bool, device=g_t.device)]*(n//128)
+        )
+        tril = torch.ones_like(block_diag).tril()
+        block_tril = tril.logical_or(block_diag)
+        tril.logical_and_(block_diag.logical_not())
+        alt_history_mask[:n,:n] = block_tril  # g_t self-attends causally in blocks
+        alt_history_mask[n:,n:] = block_diag  # cor self-attends in blocks only
+        alt_history_mask[n:,:n] = tril  # cor cross attends to past g_t blocks
+        alt_history_mask = alt_history_mask[None,None]  # 1 1 2n 2n
+        dec_cross_mask = torch.block_diag(block_diag,block_diag)  # 1 1 2n 2n
+        position_ids = torch.cat([torch.arange(n, device=g_t.device)]*2, dim=0).unsqueeze(0)  # 1 2n
+
         # Embed the given vocabulary indices using the given attention mask, with pre-/post-norm and dropout as specified
         # x_in: batch_size x seq_len
         # mask: batch_size x seq_len x seq_len
@@ -353,7 +514,8 @@ class LLaMAHeadless(nn.Module):
                 position_ids=position_ids,
                 past_key_value_state=past_key_value_states[i],
                 use_cache=use_cache,
-                **attn_kwargs,
+                mask = alt_history_mask,
+                # **attn_kwargs,
             )
 
             if use_cache:
@@ -361,6 +523,15 @@ class LLaMAHeadless(nn.Module):
                 present_key_value_states.append(present_key_value_state)
             else:
                 x_in = output
+
+        # Decoder time!
+        d_in = self.embedding(d_in)
+        enc_out = x_in
+        output = self.decoder[0](enc_out, d_in)
+        output = self.decoder[1](output, enc_out, position_ids, mask=alt_history_mask, c_mask=dec_cross_mask)
+        output = self.decoder[2](output, enc_out, position_ids, mask=alt_history_mask, c_mask=dec_cross_mask)
+        # We only care about recovering the corrupted portions
+        output = output[:,n:]
 
         dec_out = x_in
         dec_out = self.dec_norm(dec_out)
@@ -445,7 +616,9 @@ class LLaMA(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,
+        g_t: torch.Tensor,
+        cor: torch.Tensor,
+        dec: torch.Tensor,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value_states: Optional[Tuple[torch.FloatTensor,]] = None,
         use_cache: bool = False,
@@ -459,7 +632,7 @@ class LLaMA(nn.Module):
             **attn_kwargs,
         )
         output, cache = self.base_model(
-            x, position_ids, past_key_value_states, use_cache, **attn_kwargs
+            g_t, cor, dec, position_ids, past_key_value_states, use_cache, **attn_kwargs
         )
 
         output = gather_outputs(output, last_n_tokens, **attn_kwargs)

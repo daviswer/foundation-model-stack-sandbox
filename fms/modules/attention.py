@@ -444,6 +444,83 @@ class UnfusedQKV(QKV):
         keys = self.key(k)
         values = self.value(v)
         return queries, keys, values
+    
+
+class GatedQKV(QKV):
+    """
+    Gated Weights implementation of QKV
+    """
+
+    def __init__(
+        self,
+        emb_dim: int,
+        nheads: int,
+        kvheads: int,
+        emb_kq_per_head: int,
+        emb_v_per_head: int,
+        use_bias: bool,
+        linear_config: Optional[Mapping[str, Any]] = None,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(
+            emb_dim,
+            nheads,
+            kvheads,
+            emb_kq_per_head,
+            emb_v_per_head,
+            use_bias,
+            linear_config,
+            *args,
+            **kwargs,
+        )
+
+        self.query = get_linear(
+            self.emb_dim,
+            2 * self.nheads * self.emb_kq_per_head,
+            bias=use_bias,
+            linear_config=linear_config,
+        )
+        self.key = get_linear(
+            self.emb_dim,
+            self.kvheads * self.emb_kq_per_head,
+            bias=use_bias,
+            linear_config=linear_config,
+        )
+        self.value = get_linear(
+            self.emb_dim,
+            self.kvheads * self.emb_v_per_head,
+            bias=use_bias,
+            linear_config=linear_config,
+        )
+        self.split_val = self.nheads * self.emb_kq_per_head
+
+    def reset_parameters(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.trunc_normal_(m.weight, mean=0.0, std=0.02)
+                if self.use_bias:
+                    m.bias.data.zero_()
+
+    def forward(
+        self,
+        q: torch.Tensor,
+        k: Optional[torch.Tensor],
+        v: Optional[torch.Tensor],
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if k is None and v is None:
+            k = q
+            v = q
+        elif k is None or v is None:
+            raise ValueError(
+                "both k and v must either be given as tensors or both None"
+            )
+
+        # b x h x qlen x ds
+        queries, gates = self.query(q).split(self.split_val)
+        keys = self.key(k)
+        values = self.value(v)
+        return queries, keys, values, gates
 
 
 class FusedQKV(QKV):
@@ -709,6 +786,196 @@ class MultiHeadAttention(nn.Module):
 
         attn = attn.view(batch_size, q_len, self.nheads * self.emb_v_per_head)
         out = self.dense(attn)
+
+        # if use_cache=True, we return the hidden_state as well as the kv cache
+        if use_cache:
+            return out, (keys_return, values_return)
+        else:
+            return out
+        
+
+class GatedMultiHeadAttention(nn.Module):
+    """
+    Performs multi-headed self- or cross-attention, with optional attention masking.
+    ...
+    Args
+    ----
+    emb_dim : int
+        Latent dimensionality of input and output tensors.
+    emb_kq : int
+        Latent dimensionality of each head in key and query projections (attention dimension).
+    emb_v : int
+        Latent dimensionality of each head in value projection (mixing dimension).
+    nheads : int
+        Number of attention heads.
+    p_dropout : float|None
+        Dropout probability. Must be in range [0,1]. If 0 or None, dropout will not be used.
+    use_bias : bool
+        Include bias terms in fully-connected sublayers?
+    fused : bool
+        If True, qkv weights will be fused, otherwise qkv weights will be unfused.
+    linear_config : Mapping[str, Any] | None
+        Configuration for selection of linear modules (QKV, dense).
+        Pass as {"linear_type": [str | callable], <other kwargs>}.
+        "linear_type" should provide the string identifier of a registered type
+        (e.g., "torch_linear", "gptq", ...) or a callable for module selection depending
+        on module name. Additional config options should be provided as kwargs in
+        linear_config.
+    """
+
+    def __init__(
+        self,
+        emb_dim,
+        emb_kq,
+        emb_v,
+        nheads,
+        kvheads,
+        p_dropout=None,
+        use_bias=False,
+        position_encoder: Optional[PositionEncoder] = None,
+        fused: bool = True,
+        linear_config: Optional[Mapping[str, Any]] = None,
+        scale_factor: Optional[float] = None,
+    ):
+        super(GatedMultiHeadAttention, self).__init__()
+        self.nheads = nheads
+        self.kvheads = kvheads
+        self.emb_dim = emb_dim
+        self.emb_kq_per_head = emb_kq
+        self.emb_v_per_head = emb_v
+        self.p_dropout = p_dropout if p_dropout is not None else 0.0
+        self.use_bias = use_bias
+        self.fused = fused
+        self.linear_config = linear_config
+        self.scale_factor = scale_factor
+
+        self.in_proj: QKV = (GatedQKV)(
+            self.emb_dim,
+            self.nheads,
+            self.kvheads,
+            self.emb_kq_per_head,
+            self.emb_v_per_head,
+            self.use_bias,
+            linear_config=linear_config,
+        )
+
+        self.dense = get_linear(
+            self.nheads * self.emb_v_per_head,
+            self.emb_dim,
+            bias=use_bias,
+            linear_config=linear_config,
+        )
+
+        if self.p_dropout:
+            self.attn_dropout = nn.Dropout(self.p_dropout)
+        self.position_encoder = position_encoder
+        self.act = nn.SiLU()
+
+    def reset_parameters(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.trunc_normal_(m.weight, mean=0.0, std=0.02)
+                if self.use_bias:
+                    m.bias.data.zero_()
+            elif isinstance(m, QKV):
+                m.reset_parameters()
+
+    def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
+        return TPMultiHeadAttention.import_module(self, group)
+
+    def forward(
+        self,
+        q: torch.Tensor,
+        k: Optional[torch.Tensor] = None,
+        v: Optional[torch.Tensor] = None,
+        position_ids=None,
+        past_key_value_state: Optional[Tuple[Tensor | None, Tensor | None]] = None,
+        use_cache=False,
+        **attn_kwargs: Unpack[AttentionKwargs],
+    ):
+        """
+        past_key_value_state: tuple
+            the cache to be used in attention of the form (<self/cross>_key, <self/cross>_value)
+        position_ids: Optional[torch.LongTensor]
+            The position of each of the tokens encoded in q and k. Used for RoPE embeddings
+        use_cache: bool
+            if True, the kv states for self/cross attention will be saved, otherwise they will not be saved
+
+        Returns
+        -------
+        tensor or tuple
+            If use_cache=False, only the hidden state will be returned as a tensor. If use_cache=True, a tuple will be
+            returned in the form (hidden_state, cache) where hidden_state is a tensor and cache is of the form specified
+            in past_key_value_state
+        """
+        # q, k, v: batch_size x seq_len x emb_dim
+        # mask: batch_size x seq_len x seq_len
+        batch_size, q_len, _ = q.size()
+
+        # if this is self attention, we always recompute
+        # cross attention only gets computed when a cache does not exist
+        # if we dont have the cache yet, we need to compute
+        # d x (h x ds)
+        # b x kvlen x d
+        # b x kvlen x h x ds
+        # b x h x kvlen x ds
+        # todo: Cross attention (This always is true for now)
+        q_out, g_out, k_out, v_out = self.in_proj(q, k, v)
+
+        # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
+        queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
+        keys = k_out.view(batch_size, q_len, self.kvheads, self.emb_kq_per_head)
+        values = v_out.view(batch_size, q_len, self.kvheads, self.emb_v_per_head)
+
+        # You want to apply rotary embeddings pre-cache
+        if self.position_encoder is not None:
+            queries, keys = self.position_encoder.adjusted_qk(
+                queries, keys, position_ids, past_key_value_state, use_cache
+            )
+
+        attn_compute_dict = get_attention_type(**attn_kwargs)
+
+        if use_cache:
+            if past_key_value_state is None:
+                past_key_value_state = (None, None)
+
+            keys_compute, values_compute, keys_return, values_return = (
+                attn_compute_dict["store"](
+                    keys,
+                    values,
+                    past_key_value_state[0],
+                    past_key_value_state[1],
+                    **attn_kwargs,
+                )
+            )
+        else:
+            keys_compute, values_compute = keys, values
+
+        if attn_compute_dict["is_prefill"](**attn_kwargs):
+            attn = attn_compute_dict["compute_prefill"](
+                queries,
+                keys_compute,
+                values_compute,
+                self.nheads,
+                self.kvheads,
+                self.p_dropout if self.training else 0.0,
+                self.scale_factor,
+                **attn_kwargs,
+            )
+        else:
+            attn = attn_compute_dict["compute_decode"](
+                queries,
+                keys_compute,
+                values_compute,
+                self.nheads,
+                self.kvheads,
+                self.p_dropout if self.training else 0.0,
+                self.scale_factor,
+                **attn_kwargs,
+            )
+
+        attn = attn.view(batch_size, q_len, self.nheads * self.emb_v_per_head)
+        out = self.dense(attn * self.act(g_out))
 
         # if use_cache=True, we return the hidden_state as well as the kv cache
         if use_cache:
