@@ -243,10 +243,6 @@ def _sdpa_compute_op(
         mask is None and not (key_cache.shape[2] != 1 and queries.shape[2] == 1),
     )
 
-    if torch.cuda.current_device() == 0:
-        torch.save(mask, "/gpfs/davis/temp.pth")
-        assert False
-
     # TODO: when updating to 2.7, use enable_gqa and stop using keys_e and values_e
     attn = F.scaled_dot_product_attention(
         queries,
