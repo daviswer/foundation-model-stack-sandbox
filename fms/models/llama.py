@@ -533,7 +533,7 @@ class LLaMAHeadless(nn.Module):
         # We only care about recovering the corrupted portions
         output = output[:,n:]
 
-        dec_out = x_in
+        dec_out = output
         dec_out = self.dec_norm(dec_out)
         if self.config.p_dropout:
             dec_out = self.dropout(dec_out)
