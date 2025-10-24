@@ -231,8 +231,8 @@ def _sdpa_compute_op(
         use_math = attn_algorithm == "math"
 
         torch.backends.cuda.enable_flash_sdp(use_flash)
-        torch.backends.cuda.enable_mem_efficient_sdp(use_mem_efficient)
-        torch.backends.cuda.enable_math_sdp(use_math)
+        # torch.backends.cuda.enable_mem_efficient_sdp(use_mem_efficient)
+        # torch.backends.cuda.enable_math_sdp(use_math)
 
     attn_mask = mask
     if attn_mask is not None and attn_mask.dtype != torch.bool:
@@ -242,6 +242,11 @@ def _sdpa_compute_op(
         "is_causal_mask",
         mask is None and not (key_cache.shape[2] != 1 and queries.shape[2] == 1),
     )
+
+    print(is_causal, queries.shape, keys_e.shape, mask.shape)
+    print(mask[0,0].sum(-1).view(-1,128)[:,0])
+    print(mask[0,0].sum(-2).view(-1,128)[:,0])
+    print()
 
     # TODO: when updating to 2.7, use enable_gqa and stop using keys_e and values_e
     attn = F.scaled_dot_product_attention(
