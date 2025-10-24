@@ -480,8 +480,8 @@ class LLaMAHeadless(nn.Module):
     ):
         n = g_t.size(1)
         # Construct input sequences and masks
-        x_in = torch.cat([g_t,cor], dim=1)
-        d_in = torch.cat([dec,dec], dim=1)
+        x_in = torch.cat([g_t,cor], dim=1).int()
+        d_in = torch.cat([dec,dec], dim=1).int()
         alt_history_mask = torch.zeros(2*n, 2*n, dtype=torch.bool, device=g_t.device)
         # N 1 Q K
         block_diag = torch.block_diag(
