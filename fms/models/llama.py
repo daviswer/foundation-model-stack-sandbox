@@ -486,8 +486,8 @@ class LLaMAHeadless(nn.Module):
         def alt_history_mask(b, h, q_i, k_i):
             block_diag = q_i//128 == k_i//128
             tril = q_i >= k_i
-            block_tril = block_diag or tril
-            lower_block_tril = tril and not block_diag
+            block_tril = block_diag.logical_or(tril)
+            lower_block_tril = tril.logical_and(block_diag.logical_not())
             if q_i >= n:
                 if k_i >= n:
                     # Decoder self
@@ -507,7 +507,7 @@ class LLaMAHeadless(nn.Module):
             return q_i//128 == k_i//128
         
         def dec_history_mask(b, h, q_i, k_i):
-            return alt_history_mask(b, h, q_i, k_i) and q_i >= k_i
+            return alt_history_mask(b, h, q_i, k_i).logical_and(q_i >= k_i)
 
         # alt_history_mask = torch.zeros(2*n, 2*n, dtype=torch.bool, device=g_t.device)
         # # N 1 Q K
