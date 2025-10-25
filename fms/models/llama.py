@@ -484,24 +484,8 @@ class LLaMAHeadless(nn.Module):
         d_in = torch.cat([dec,dec], dim=1).int()
 
         def alt_history_mask(b, h, q_i, k_i):
-            block_diag = q_i//128 == k_i//128
-            tril = q_i >= k_i
-            block_tril = block_diag.logical_or(tril)
-            lower_block_tril = tril.logical_and(block_diag.logical_not())
-            if q_i >= n:
-                if k_i >= n:
-                    # Decoder self
-                    return block_diag
-                else:
-                    # Decoder cross
-                    return lower_block_tril
-            else:
-                if k_i >= n:
-                    # Encoder cross
-                    return False
-                else:
-                    # Encoder self
-                    return block_tril
+            double_lower_tril = (q_i%n)//128 > k_i//128
+            return double_lower_tril.logical_or(q_i//128 == k_i//128)
                 
         def dec_cross_mask(b, h, q_i, k_i):
             return q_i//128 == k_i//128
