@@ -231,8 +231,8 @@ def _sdpa_compute_op(
         use_math = attn_algorithm == "math"
 
         torch.backends.cuda.enable_flash_sdp(use_flash)
-        # torch.backends.cuda.enable_mem_efficient_sdp(use_mem_efficient)
-        # torch.backends.cuda.enable_math_sdp(use_math)
+        torch.backends.cuda.enable_mem_efficient_sdp(use_mem_efficient)
+        torch.backends.cuda.enable_math_sdp(use_math)
 
     attn_mask = mask
     if attn_mask is not None and attn_mask.dtype != torch.bool:

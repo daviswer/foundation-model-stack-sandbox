@@ -494,6 +494,7 @@ class LLaMAHeadless(nn.Module):
         alt_history_mask[n:,n:] = block_diag  # cor self-attends in blocks only
         alt_history_mask[n:,:n] = tril  # cor cross attends to past g_t blocks
         alt_history_mask = alt_history_mask[None,None]  # 1 1 2n 2n
+        dec_history_mask = alt_history_mask.tril()
         dec_cross_mask = torch.block_diag(block_diag,block_diag)[None,None]  # 1 1 2n 2n
         position_ids = torch.cat([torch.arange(n, device=g_t.device)]*2, dim=0).unsqueeze(0)  # 1 2n
 
@@ -528,8 +529,8 @@ class LLaMAHeadless(nn.Module):
         d_in = self.embedding(d_in)
         enc_out = x_in
         output = self.decoder[0](enc_out, d_in)
-        output = self.decoder[1](output, enc_out, position_ids, mask=alt_history_mask, c_mask=dec_cross_mask)
-        output = self.decoder[2](output, enc_out, position_ids, mask=alt_history_mask, c_mask=dec_cross_mask)
+        output = self.decoder[1](output, enc_out, position_ids, mask=dec_history_mask, c_mask=dec_cross_mask)
+        output = self.decoder[2](output, enc_out, position_ids, mask=dec_history_mask, c_mask=dec_cross_mask)
         # We only care about recovering the corrupted portions
         output = output[:,n:]
 
