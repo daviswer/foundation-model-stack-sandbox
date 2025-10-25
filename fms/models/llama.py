@@ -482,20 +482,47 @@ class LLaMAHeadless(nn.Module):
         # Construct input sequences and masks
         x_in = torch.cat([g_t,cor], dim=1).int()
         d_in = torch.cat([dec,dec], dim=1).int()
-        alt_history_mask = torch.zeros(2*n, 2*n, dtype=torch.bool, device=g_t.device)
-        # N 1 Q K
-        block_diag = torch.block_diag(
-            *[torch.ones(128,128, dtype=torch.bool, device=g_t.device)]*(n//128)
-        )
-        tril = torch.ones_like(block_diag).tril()
-        block_tril = tril.logical_or(block_diag)
-        tril.logical_and_(block_diag.logical_not())
-        alt_history_mask[:n,:n] = block_tril  # g_t self-attends causally in blocks
-        alt_history_mask[n:,n:] = block_diag  # cor self-attends in blocks only
-        alt_history_mask[n:,:n] = tril  # cor cross attends to past g_t blocks
-        alt_history_mask = alt_history_mask[None,None]  # 1 1 2n 2n
-        dec_history_mask = alt_history_mask.tril()
-        dec_cross_mask = torch.block_diag(block_diag,block_diag)[None,None]  # 1 1 2n 2n
+
+        def alt_history_mask(b, h, q_i, k_i):
+            block_diag = q_i//128 == k_i//128
+            tril = q_i >= k_i
+            block_tril = block_diag or tril
+            lower_block_tril = tril and not block_diag
+            if q_i >= n:
+                if k_i >= n:
+                    # Decoder self
+                    return block_diag
+                else:
+                    # Decoder cross
+                    return lower_block_tril
+            else:
+                if k_i >= n:
+                    # Encoder cross
+                    return False
+                else:
+                    # Encoder self
+                    return block_tril
+                
+        def dec_cross_mask(b, h, q_i, k_i):
+            return q_i//128 == k_i//128
+        
+        def dec_history_mask(b, h, q_i, k_i):
+            return alt_history_mask(b, h, q_i, k_i) and q_i >= k_i
+
+        # alt_history_mask = torch.zeros(2*n, 2*n, dtype=torch.bool, device=g_t.device)
+        # # N 1 Q K
+        # block_diag = torch.block_diag(
+        #     *[torch.ones(128,128, dtype=torch.bool, device=g_t.device)]*(n//128)
+        # )
+        # tril = torch.ones_like(block_diag).tril()
+        # block_tril = tril.logical_or(block_diag)
+        # tril.logical_and_(block_diag.logical_not())
+        # alt_history_mask[:n,:n] = block_tril  # g_t self-attends causally in blocks
+        # alt_history_mask[n:,n:] = block_diag  # cor self-attends in blocks only
+        # alt_history_mask[n:,:n] = tril  # cor cross attends to past g_t blocks
+        # alt_history_mask = alt_history_mask[None,None]  # 1 1 2n 2n
+        # dec_history_mask = alt_history_mask.tril()
+        # dec_cross_mask = torch.block_diag(block_diag,block_diag)[None,None]  # 1 1 2n 2n
         position_ids = torch.cat([torch.arange(n, device=g_t.device)]*2, dim=0).unsqueeze(0)  # 1 2n
 
         # Embed the given vocabulary indices using the given attention mask, with pre-/post-norm and dropout as specified

@@ -32,6 +32,10 @@ from fms.modules.linear import (
 from fms.modules.positions import PositionEncoder
 from fms.modules.tp import TPModule
 
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+import functools
+flex_attention = torch.compile(flex_attention, dynamic=False)
+
 __sdpa_previous_flash: bool = torch.backends.cuda.flash_sdp_enabled()
 __sdpa_previous_mem_efficient: bool = torch.backends.cuda.mem_efficient_sdp_enabled()
 __sdpa_previous_math: bool = torch.backends.cuda.math_sdp_enabled()
@@ -204,12 +208,12 @@ def _sdpa_compute_op(
         value_cache = value_cache.transpose(2, 1)
     mask = attn_kwargs.get("mask", None)
 
-    # TODO: Once we add alibi support, merge rel pos bias and mask into single float mask
-    if mask is not None:
-        # Our expected mask format is bs x q_len x k_len, so to make it broadcastable
-        # we need to create the nheads dimension
-        while len(mask.size()) != 4:  # expects bs (x nheads) x q_len x kv_len
-            mask = mask.unsqueeze(1)
+    # # TODO: Once we add alibi support, merge rel pos bias and mask into single float mask
+    # if mask is not None:
+    #     # Our expected mask format is bs x q_len x k_len, so to make it broadcastable
+    #     # we need to create the nheads dimension
+    #     while len(mask.size()) != 4:  # expects bs (x nheads) x q_len x kv_len
+    #         mask = mask.unsqueeze(1)
 
     # Expand kv so black-box attn will work
     expansion = nheads // kvheads
@@ -223,41 +227,48 @@ def _sdpa_compute_op(
         keys_e = key_cache
         values_e = value_cache
 
-    attn_algorithm = attn_kwargs.get("attn_algorithm", None)
-    if attn_algorithm:
-        # Pick which fused attn kernels will run.
-        use_flash = attn_algorithm == "flash"
-        use_mem_efficient = attn_algorithm == "mem"
-        use_math = attn_algorithm == "math"
+    # q/k/v: b h n d
+    block_mask = create_block_mask(mask, 1, 1, queries.size(2), keys_e.size(2))
+    def soft_cap(score, b, h, q_i, kv_i):
+        return 20 * score.div(20).tanh()
+    attention = functools.partial(flex_attention, block_mask=block_mask, score_mod=soft_cap)
+    attn = attention(queries, keys_e, values_e)
 
-        torch.backends.cuda.enable_flash_sdp(use_flash)
-        torch.backends.cuda.enable_mem_efficient_sdp(use_mem_efficient)
-        torch.backends.cuda.enable_math_sdp(use_math)
+    # attn_algorithm = attn_kwargs.get("attn_algorithm", None)
+    # if attn_algorithm:
+    #     # Pick which fused attn kernels will run.
+    #     use_flash = attn_algorithm == "flash"
+    #     use_mem_efficient = attn_algorithm == "mem"
+    #     use_math = attn_algorithm == "math"
 
-    attn_mask = mask
-    if attn_mask is not None and attn_mask.dtype != torch.bool:
-        attn_mask = attn_mask.to(dtype=queries.dtype)
+    #     torch.backends.cuda.enable_flash_sdp(use_flash)
+    #     torch.backends.cuda.enable_mem_efficient_sdp(use_mem_efficient)
+    #     torch.backends.cuda.enable_math_sdp(use_math)
 
-    is_causal = attn_kwargs.get(
-        "is_causal_mask",
-        mask is None and not (key_cache.shape[2] != 1 and queries.shape[2] == 1),
-    )
+    # attn_mask = mask
+    # if attn_mask is not None and attn_mask.dtype != torch.bool:
+    #     attn_mask = attn_mask.to(dtype=queries.dtype)
 
-    # TODO: when updating to 2.7, use enable_gqa and stop using keys_e and values_e
-    attn = F.scaled_dot_product_attention(
-        queries,
-        keys_e,
-        values_e,
-        attn_mask=attn_mask,
-        dropout_p=p_dropout,
-        is_causal=is_causal,
-        scale=scale_factor,
-    )
+    # is_causal = attn_kwargs.get(
+    #     "is_causal_mask",
+    #     mask is None and not (key_cache.shape[2] != 1 and queries.shape[2] == 1),
+    # )
 
-    if attn_algorithm:
-        torch.backends.cuda.enable_flash_sdp(__sdpa_previous_flash)
-        torch.backends.cuda.enable_mem_efficient_sdp(__sdpa_previous_mem_efficient)
-        torch.backends.cuda.enable_math_sdp(__sdpa_previous_math)
+    # # TODO: when updating to 2.7, use enable_gqa and stop using keys_e and values_e
+    # attn = F.scaled_dot_product_attention(
+    #     queries,
+    #     keys_e,
+    #     values_e,
+    #     attn_mask=attn_mask,
+    #     dropout_p=p_dropout,
+    #     is_causal=is_causal,
+    #     scale=scale_factor,
+    # )
+
+    # if attn_algorithm:
+    #     torch.backends.cuda.enable_flash_sdp(__sdpa_previous_flash)
+    #     torch.backends.cuda.enable_mem_efficient_sdp(__sdpa_previous_mem_efficient)
+    #     torch.backends.cuda.enable_math_sdp(__sdpa_previous_math)
 
     # attn: bs x seq_len x nheads*emb_v_per_head
     # attn: b x h x qlen x ds
