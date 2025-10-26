@@ -483,6 +483,7 @@ class MultiHeadAttention(nn.Module):
         self.position_encoder = position_encoder
 
         self.wstatic = nn.Linear(self.emb_dim, self.kvheads*2, bias=True)
+        self.register_buffer("staticb", torch.empty(self.kvheads*2))
 
         self.UA = UniversalAttention.apply
         self.SMVMM = SMVecMatMul.apply
@@ -497,8 +498,9 @@ class MultiHeadAttention(nn.Module):
                 m.reset_parameters()
         static_max = math.log(.1)
         static_min = math.log(.001)
-        nn.init.uniform_(self.wstatic.bias)
-        self.wstatic.bias.data = self.wstatic.bias.data * (static_max - static_min) + static_min
+        # nn.init.uniform_(self.wstatic.bias)
+        self.wstatic.bias.data.zero_()
+        self.staticb = torch.rand_like(self.staticb) * (static_max - static_min) + static_min
 
     # def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
     #     return TPMultiHeadAttention.import_module(self, group)
