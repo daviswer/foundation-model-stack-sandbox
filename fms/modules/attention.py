@@ -600,9 +600,9 @@ class MultiHeadAttention(nn.Module):
             
         else:
             # Blockwise universal attention
-            queries = queries.transpose(1,2)   # b hr l d
-            keys = keys.transpose(1,2)  # b h l d
-            values = values.transpose(1,2)  # b h l d
+            queries = queries.transpose(1,2).contiguous()   # b hr l d
+            keys = keys.transpose(1,2).contiguous()  # b h l d
+            values = values.transpose(1,2).contiguous()  # b h l d
             rates = static_src
 
             attn, affs = self.UA(queries, keys, values, True, 1.3, static_src, static_dest)

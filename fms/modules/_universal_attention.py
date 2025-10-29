@@ -454,9 +454,7 @@ class _attention(torch.autograd.Function):
         q, k, v, o, M, static_src, static_dest = ctx.saved_tensors
         do = do.contiguous()
         ddecay = ddecay.contiguous()
-        assert q.stride() == do.stride() 
-        assert q.stride() == o.stride() 
-        assert k.stride() == v.stride()
+        assert q.stride() == do.stride() == o.stride() and k.stride() == v.stride()
         dq = torch.empty_like(q)
         dk = torch.empty_like(k)
         dv = torch.empty_like(v)
