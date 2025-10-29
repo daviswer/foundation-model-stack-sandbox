@@ -34,6 +34,8 @@ from fms.modules.tp import TPModule
 
 from torch.autograd import Function
 
+from ._universal_attention import attention as UAOpt
+
 def get_attention_type():
     pass
 
@@ -485,8 +487,8 @@ class MultiHeadAttention(nn.Module):
         self.wstatic = nn.Linear(self.emb_dim, self.kvheads*2, bias=True)
         self.register_buffer("staticb", torch.empty(self.kvheads*2))
 
-        self.UA = UniversalAttention.apply
-        self.SMVMM = SMVecMatMul.apply
+        self.UA = UAOpt
+        # self.SMVMM = SMVecMatMul.apply
 
     def reset_parameters(self):
         for m in self.modules():
@@ -603,16 +605,18 @@ class MultiHeadAttention(nn.Module):
             values = values.transpose(1,2)  # b h l d
             rates = static_src
 
-            r = self.nheads // self.kvheads
-            mask = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
-            torch.backends.cuda.enable_math_sdp(False)
-            attn = F.scaled_dot_product_attention(
-                queries, 
-                torch.repeat_interleave(keys,r,dim=1), 
-                torch.repeat_interleave(values,r,dim=1), 
-                attn_mask=mask,
-                scale=1,
-            )  # b h l d
+            output, _ = self.UA(queries, keys, values, True, 1.3, static_src, static_dest)
+
+            # r = self.nheads // self.kvheads
+            # mask = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
+            # torch.backends.cuda.enable_math_sdp(False)
+            # attn = F.scaled_dot_product_attention(
+            #     queries, 
+            #     torch.repeat_interleave(keys,r,dim=1), 
+            #     torch.repeat_interleave(values,r,dim=1), 
+            #     attn_mask=mask,
+            #     scale=1,
+            # )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
             affs = mask.view(batch_size, self.kvheads, -1, mask.size(-2), mask.size(-1))[:,:,0,-1].exp()  # b h l
             aux = affs.gt(.001).to(dtype=affs.dtype).sub(affs.detach()).add(affs).view(batch_size, -1).mean(-1)
