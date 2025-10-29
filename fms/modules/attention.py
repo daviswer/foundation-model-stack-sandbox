@@ -619,7 +619,7 @@ class MultiHeadAttention(nn.Module):
             # )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
             affs = affs.exp()  # b h l
-            aux = affs.gt(.001).to(dtype=affs.dtype).sub(affs.detach()).add(affs).view(batch_size, -1).mean(-1)
+            aux = affs.gt(.001).to(dtype=affs.dtype).sub(affs.detach()).add(affs).view(batch_size, -1).mean(-1).to(dtype=queries.dtype)
 
             # c = 512
             # b = batch_size
