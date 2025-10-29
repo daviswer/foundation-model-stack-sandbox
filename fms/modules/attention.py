@@ -483,7 +483,7 @@ class MultiHeadAttention(nn.Module):
         self.position_encoder = position_encoder
 
         self.wstatic = nn.Linear(self.emb_dim, self.kvheads*2, bias=True)
-        self.register_buffer("staticb", torch.empty(self.kvheads*2))
+        self.register_buffer("staticb", torch.empty(self.kvheads*2, dtype=self.wstatic.bias.dtype))
 
         self.UA = UniversalAttention.apply
         self.SMVMM = SMVecMatMul.apply
