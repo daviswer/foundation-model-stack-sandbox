@@ -37,7 +37,6 @@ from torch.autograd import Function
 
 class UniversalAttention(Function):
     @staticmethod
-    @torch.compile
     def forward(kc, vc, xq, static_src, static_dest):
         b,h,r,l,d = xq.shape
         _,_,n,c,_ = kc.shape
@@ -77,7 +76,6 @@ class UniversalAttention(Function):
         ctx.save_for_backward(kc,vc,xq,ss,sd)
 
     @staticmethod
-    @torch.compile
     def backward(ctx, g_out, g_denom, g_affs):
         # Note: when using mixed precision, g_out is downcast but g_denom is always fp32
         kc,vc,xq,static_src,static_dest = ctx.saved_tensors
@@ -135,7 +133,6 @@ class UniversalAttention(Function):
 
 class SMVecMatMul(Function):
     @staticmethod
-    @torch.compile
     def forward(mat, vec):
         # mat: ... d n
         # vec: ... n
@@ -147,7 +144,6 @@ class SMVecMatMul(Function):
         ctx.save_for_backward(mat, vec)
 
     @staticmethod
-    @torch.compile
     def backward(ctx, g):
         mat, vec = ctx.saved_tensors
         vec = vec.softmax(dim=-1)
@@ -481,8 +477,8 @@ class MultiHeadAttention(nn.Module):
         self.wstatic = nn.Linear(self.emb_dim, self.kvheads*2, bias=True)
         self.register_buffer("staticb", torch.empty(self.kvheads*2))
 
-        self.UA = UniversalAttention.apply
-        self.SMVMM = SMVecMatMul.apply
+        self.UA = torch.compile(UniversalAttention.apply)
+        self.SMVMM = torch.compile(SMVecMatMul.apply)
 
     def reset_parameters(self):
         for m in self.modules():
