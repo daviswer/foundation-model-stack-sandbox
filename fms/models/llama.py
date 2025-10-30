@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Tuple
@@ -121,8 +122,6 @@ class DecoderBlock(nn.Module):
         position_ids=None,
         past_key_value_state=None,
         use_cache=False,
-        c_mask=None,
-        **attn_kwargs: Unpack[AttentionKwargs],
     ):
         # if the cache is not empty, we need to get the kv cache for self and cross attention
         self_attn_past_key_value = past_key_value_state
@@ -139,7 +138,7 @@ class DecoderBlock(nn.Module):
             position_ids=position_ids,
             past_key_value_state=self_attn_past_key_value,
             use_cache=use_cache,
-            **attn_kwargs,
+            attn_name="sdpa_causal" if self_attn_past_key_value is None else "sdpa_bidirectional",
         )
         cache = None
         if use_cache:
@@ -157,9 +156,9 @@ class DecoderBlock(nn.Module):
             k=x0,
             v=x0,
             position_ids=position_ids,
-            past_key_value_state=self_attn_past_key_value,
+            past_key_value_state=None,
             use_cache=use_cache,
-            mask=c_mask,
+            attn_name="sdpa_bidirectional",
         )
         if self.config.p_dropout != 0:
             x = self.dropout(x)
@@ -276,7 +275,8 @@ class LLaMABlock(nn.Module):
             position_ids=position_ids,
             past_key_value_state=self_attn_past_key_value,
             use_cache=use_cache,
-            **attn_kwargs,
+            attn_name="sdpa_bidirectional",
+            # **attn_kwargs,
         )
         cache = None
         if use_cache:
@@ -470,41 +470,21 @@ class LLaMAHeadless(nn.Module):
 
     def forward(
         self,
-        g_t,
-        cor,
-        dec,
+        inp,
+        prior,
+        head,
         position_ids=None,
         past_key_value_states=None,
         use_cache=False,
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
-        n = g_t.size(1)
-        # Construct input sequences and masks
-        x_in = torch.cat([g_t,cor], dim=1).int()
-        d_in = torch.cat([dec,dec], dim=1).int()
-        alt_history_mask = torch.zeros(2*n, 2*n, dtype=torch.bool, device=g_t.device)
-        # N 1 Q K
-        block_diag = torch.block_diag(
-            *[torch.ones(128,128, dtype=torch.bool, device=g_t.device)]*(n//128)
-        )
-        tril = torch.ones_like(block_diag).tril()
-        block_tril = tril.logical_or(block_diag)
-        tril.logical_and_(block_diag.logical_not())
-        alt_history_mask[:n,:n] = block_tril  # g_t self-attends causally in blocks
-        alt_history_mask[n:,n:] = block_diag  # cor self-attends in blocks only
-        alt_history_mask[n:,:n] = tril  # cor cross attends to past g_t blocks
-        alt_history_mask = alt_history_mask[None,None]  # 1 1 2n 2n
-        dec_history_mask = alt_history_mask.tril()
-        dec_cross_mask = torch.block_diag(block_diag,block_diag)[None,None]  # 1 1 2n 2n
-        position_ids = torch.cat([torch.arange(n, device=g_t.device)]*2, dim=0).unsqueeze(0)  # 1 2n
-
         # Embed the given vocabulary indices using the given attention mask, with pre-/post-norm and dropout as specified
         # x_in: batch_size x seq_len
         # mask: batch_size x seq_len x seq_len
         # bias: nheads x seq_len x seq_len
         if past_key_value_states is None or len(past_key_value_states) == 0:
             past_key_value_states = [None for _ in range(len(self.layers))]
-        x_in = self.embedding(x_in)
+        x_in = self.embedding(inp)
 
         # this is the output cache for all the decoder layers
         present_key_value_states = []
@@ -515,8 +495,7 @@ class LLaMAHeadless(nn.Module):
                 position_ids=position_ids,
                 past_key_value_state=past_key_value_states[i],
                 use_cache=use_cache,
-                mask = alt_history_mask,
-                # **attn_kwargs,
+                **attn_kwargs,
             )
 
             if use_cache:
@@ -524,21 +503,53 @@ class LLaMAHeadless(nn.Module):
                 present_key_value_states.append(present_key_value_state)
             else:
                 x_in = output
-
+        
+        rank = int(os.environ["RANK"])
+        if rank==0:
+            print(f"Encoder complete. Cache length is {len(present_key_value_states)} with item size {present_key_value_states[0][0].shape}")
+        
         # Decoder time!
-        d_in = self.embedding(d_in)
         enc_out = x_in
-        output = self.decoder[0](enc_out, d_in)
-        output = self.decoder[1](output, enc_out, position_ids, mask=dec_history_mask, c_mask=dec_cross_mask)
-        output = self.decoder[2](output, enc_out, position_ids, mask=dec_history_mask, c_mask=dec_cross_mask)
-        # We only care about recovering the corrupted portions
-        output = output[:,n:]
+        if past_key_value_states[0] is None:
+            # Prefill
+            d_in = self.embedding(prior)
+            if rank==0:
+                print("Running decoder prefill")
+            output = self.decoder[0](enc_out, d_in)
+            output, present_key_value_state = self.decoder[1](output, enc_out, position_ids, past_key_value_states=past_key_value_states[-2])
+            present_key_value_states.append(present_key_value_state)
+            output, present_key_value_state = self.decoder[2](output, enc_out, position_ids, past_key_value_states=past_key_value_states[-1])
+            present_key_value_states.append(present_key_value_state)
+            dec_out = None
+        else:
+            # Decode the whole block
+            out = []
+            d_in = prior[:,-1:]
+            if rank==0:
+                print(f"Beginning mini-decode loop. Cache size is {past_key_value_states[-1][0].shape}")
+            pos = torch.empty(1, device=d_in.device, dtype=torch.int)
+            (kv1, kv2) = past_key_value_states[-2], past_key_value_states[-1]
+            for i in range(128):
+                pos[0] = past_key_value_states[-1][0].size(1) + i
+                d_in = self.embedding(d_in)
+                output = self.decoder[0](enc_out[:,i], d_in)
+                output, kv1 = self.decoder[1](output, enc_out, pos, past_key_value_states=kv1)
+                output, kv2 = self.decoder[2](output, enc_out, pos, past_key_value_states=kv2)
 
-        dec_out = output
-        dec_out = self.dec_norm(dec_out)
-        if self.config.p_dropout:
-            dec_out = self.dropout(dec_out)
-
+                dec_out = output
+                dec_out = self.dec_norm(dec_out)
+                if self.config.p_dropout:
+                    dec_out = self.dropout(dec_out)
+                pred = head(dec_out)  # b 1 v
+                pred = pred.argmax(dim=-1)  # b 1
+                out.append(pred)
+                d_in = pred
+            dec_out = torch.cat(out, dim=1)  # b 128
+            present_key_value_states.append(kv1)
+            present_key_value_states.append(kv2)
+                
+        if rank==0:
+            print(f"Forward pass complete. Out is {out}, kv len is {len(present_key_value_states)}, kv first is {present_key_value_states[0][0].shape}, kv final is {present_key_value_states[-1][0].shape}")
         return dec_out, present_key_value_states
 
 
@@ -617,9 +628,8 @@ class LLaMA(nn.Module):
 
     def forward(
         self,
-        g_t: torch.Tensor,
-        cor: torch.Tensor,
-        dec: torch.Tensor,
+        inp: torch.Tensor,
+        prior: torch.Tensor,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value_states: Optional[Tuple[torch.FloatTensor,]] = None,
         use_cache: bool = False,
@@ -627,22 +637,17 @@ class LLaMA(nn.Module):
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
         get_attention_type(**attn_kwargs)["validate_attn_kwargs"](
-            input_ids=g_t,
+            input_ids=inp,
             position_ids=position_ids,
             past_key_value_states=past_key_value_states,
             **attn_kwargs,
         )
-        output, cache = self.base_model(
-            g_t, cor, dec, position_ids, past_key_value_states, use_cache, **attn_kwargs
+
+        output = self.base_model(
+            inp, prior, self.head, position_ids, past_key_value_states, use_cache, **attn_kwargs
         )
 
-        output = gather_outputs(output, last_n_tokens, **attn_kwargs)
-        preds = self.head(output)
-
-        if use_cache:
-            return preds, cache
-        else:
-            return preds
+        return output
 
 
 # Register common LLaMA variants with the model registration API
