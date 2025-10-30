@@ -477,8 +477,8 @@ class MultiHeadAttention(nn.Module):
         self.wstatic = nn.Linear(self.emb_dim, self.kvheads*2, bias=True)
         self.register_buffer("staticb", torch.empty(self.kvheads*2))
 
-        self.UA = torch.compile(UniversalAttention.apply)
-        self.SMVMM = torch.compile(SMVecMatMul.apply)
+        self.UA = torch.compile(UniversalAttention.apply, dynamic=True)
+        self.SMVMM = torch.compile(SMVecMatMul.apply, dynamic=True)
 
     def reset_parameters(self):
         for m in self.modules():
