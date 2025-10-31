@@ -533,8 +533,8 @@ class LLaMAHeadless(nn.Module):
                 pos[0] = past_key_value_states[-1][0].size(1) + i
                 d_in = self.embedding(d_in)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
-                output, kv1 = self.decoder[1](output, enc_out, pos, use_cache=True, past_key_value_states=kv1)
-                output, kv2 = self.decoder[2](output, enc_out, pos, use_cache=True, past_key_value_states=kv2)
+                output, kv1 = self.decoder[1](output, enc_out, pos, use_cache=True, past_key_value_state=kv1)
+                output, kv2 = self.decoder[2](output, enc_out, pos, use_cache=True, past_key_value_state=kv2)
 
                 dec_out = output
                 dec_out = self.dec_norm(dec_out)
