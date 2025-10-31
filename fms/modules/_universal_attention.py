@@ -450,10 +450,10 @@ class _attention(torch.autograd.Function):
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM = HEAD_DIM_K
         ctx.causal = causal
-        return o[:, :, :, :HEAD_DIM_K]
+        return o[:, :, :, :HEAD_DIM_K], desc_affinity[:, :, -1, :]
 
     @staticmethod
-    def backward(ctx, do):
+    def backward(ctx, do, ao):
         q, k, v, o, M, static_src, static_dest = ctx.saved_tensors
         do = do.contiguous()
         assert do.is_contiguous()
