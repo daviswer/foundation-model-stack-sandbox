@@ -527,10 +527,10 @@ class LLaMAHeadless(nn.Module):
             d_in = prior[:,-1:]
             if rank==0:
                 print(f"Beginning mini-decode loop. Cache size is {past_key_value_states[-1][0].shape}")
-            pos = torch.empty(1, device=d_in.device, dtype=torch.int)
+            pos = torch.empty(1, 1, device=d_in.device, dtype=torch.int)
             (kv1, kv2) = past_key_value_states[-2], past_key_value_states[-1]
             for i in range(128):
-                pos[0] = past_key_value_states[-1][0].size(1) + i
+                pos[0,0] = past_key_value_states[-1][0].size(1) + i
                 d_in = self.embedding(d_in)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
                 output, kv1 = self.decoder[1](output, enc_out, pos, use_cache=True, past_key_value_state=kv1)
