@@ -1,6 +1,7 @@
 import torch
 import triton
 import triton.language as tl
+import torch.nn.functional as F
 from ._affinity_generation import _affinity_bwd, _affinity_fwd
 
 def is_hip():
@@ -12,15 +13,7 @@ def is_cuda():
 def supports_host_descriptor():
     return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
 
-def get_cuda_configs():
-    configs = []
-
-    for BLOCK_M in [32, 64, 128, 256]:
-        for BLOCK_N in [32, 64, 128, 256]:
-            configs.append(triton.Config({"BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N}, num_stages=2, num_warps=8))
-
-    return configs
-
+@torch.compile
 def _gen_affinity_scores(k, src, dest):
     kkt = torch.einsum('bnqh, bnkh -> bnqk', k, k).relu().pow(2/3).float()
     affinity = kkt * src.pow(1/3).unsqueeze(-1) * dest.pow(1/3).unsqueeze(-2)
@@ -402,7 +395,17 @@ class _attention(torch.autograd.Function):
         # when v is in float8_e5m2 it is transposed.
         HEAD_DIM_V = v.shape[-1]
         assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
-        assert HEAD_DIM_K in {16, 32, 64, 128, 256}
+        if HEAD_DIM_K not in {16, 32, 64, 128, 256}:
+            ## Then we zero-pad everything. ##
+            from math import ceil, log2
+            pow_two = int(ceil(log2(HEAD_DIM_K)))
+            assert 2**pow_two <= 256, 'Head hidden dim until 256 supported only!'
+            pad_amt = (2**pow_two)-HEAD_DIM_K
+            q = F.pad(q, (0, pad_amt), "constant", 0)
+            k = F.pad(k, (0, pad_amt), "constant", 0)
+            v = F.pad(v, (0, pad_amt), "constant", 0)
+
+        assert q.shape[-1] in {16, 32, 64, 128, 256}, f'head_dim {q.shape[-1]} must be in [16, 32, 64, 128, 256]'
         o = torch.empty_like(q)
         stage = 3 if causal else 1
         extra_kern_args = {}
@@ -417,6 +420,7 @@ class _attention(torch.autograd.Function):
 
         ## Here, we launch an affinity matrix calculation kernel to simplify implementation. ##
         desc_affinity = _affinity_fwd(k, static_src, static_dest)
+        #desc_affinity = _gen_affinity_scores(k, static_src, static_dest)
 
         ## Specialize to this blk size for reasonable performance. ##
         BLOCK_M=128
@@ -429,7 +433,7 @@ class _attention(torch.autograd.Function):
             q.shape[0], q.shape[1],  #
             desc_q, desc_k, desc_v, desc_o, desc_affinity,  #
             N_CTX=q.shape[2],  #
-            HEAD_DIM=HEAD_DIM_K,  #
+            HEAD_DIM=q.shape[-1],  #
             BLOCK_M=BLOCK_M, # Comment out after debugging finishes.
             BLOCK_N=BLOCK_N, # Comment out after debugging finishes.
             FP8_OUTPUT=False,
@@ -446,36 +450,53 @@ class _attention(torch.autograd.Function):
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM = HEAD_DIM_K
         ctx.causal = causal
-        ## We return the last row of the affinity matrix for auxiliary loss compute as well. ##
-        return o, desc_affinity[:, :, -1, :]
+        return o[:, :, :, :HEAD_DIM_K]
 
     @staticmethod
-    def backward(ctx, do, ddecay):
+    def backward(ctx, do):
         q, k, v, o, M, static_src, static_dest = ctx.saved_tensors
         do = do.contiguous()
-        ddecay = ddecay.contiguous()
+        assert do.is_contiguous()
+
+        ## Custom logic to zero-pad tensors. ##
+        HEAD_DIM_Q, HEAD_DIM_K, HEAD_DIM_V, HEAD_DIM_DO = q.shape[-1], k.shape[-1], v.shape[-1], do.shape[-1]
+        assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
+
+        ## Now, do may not be the same shape as everything else due to zero-padding.
+        ## So we accordingly adjust.
+        if do.stride() != q.stride():
+            assert q.shape[-1] >= do.shape[-1], 'Padding in fwd pass probably incorrect.'
+            pad_amt = q.shape[-1] - do.shape[-1]
+            do = F.pad(do, (0, pad_amt), "constant", 0)
+
+        ## Final check to see if everything is correct. ##
         assert q.stride() == do.stride() == o.stride() and k.stride() == v.stride()
+
         dq = torch.empty_like(q)
         dk = torch.empty_like(k)
         dv = torch.empty_like(v)
         BATCH, N_HEAD, N_CTX = q.shape[:3]
         PRE_BLOCK = 128
         NUM_WARPS, NUM_STAGES = 4, 3
-        ## The new tuned block-sizes to reduce shmem consumption. ##
         BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 64, 64, 32
         BLK_SLICE_FACTOR = 2
         PRE_BLOCK = 128
+        Q_H = N_HEAD // k.shape[1]
+        KV_H = k.shape[1]
+
+        ## We leverage streams for extra parallelism. Seems to help a little bit. ##
         pre_grid = (triton.cdiv(N_CTX, PRE_BLOCK), BATCH * N_HEAD)
         delta = torch.empty_like(M) ## (batch, qv_heads, N_CTX)
         _attn_bwd_preprocess[pre_grid](
             o, do,  #
             delta,  #
             BATCH, N_HEAD, N_CTX,  #
-            BLOCK_M=PRE_BLOCK, HEAD_DIM=ctx.HEAD_DIM  #
+            BLOCK_M=PRE_BLOCK, HEAD_DIM=do.shape[-1]  #
         )
+        ## Recompute affinity scores. ##
         affinity = _affinity_fwd(k, static_src, static_dest)
-        Q_H = N_HEAD // k.shape[1]
-        KV_H = k.shape[1]
+        #with torch.enable_grad():
+        #    affinity = _gen_affinity_scores(k, static_src, static_dest)
         daffinity = torch.zeros(affinity.shape[0], Q_H * KV_H, N_CTX, N_CTX, dtype=affinity.dtype, device=affinity.device)
 
         grid = (triton.cdiv(N_CTX, BLOCK_N1), 1, BATCH * N_HEAD)
@@ -488,7 +509,7 @@ class _attention(torch.autograd.Function):
             BLOCK_M1=BLOCK_M1, BLOCK_N1=BLOCK_N1,  #
             BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,  #
             BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
-            HEAD_DIM=ctx.HEAD_DIM,  #
+            HEAD_DIM=do.shape[-1],  #
             causal=ctx.causal,
             num_warps=NUM_WARPS,  #
             num_stages=NUM_STAGES  #
@@ -497,7 +518,8 @@ class _attention(torch.autograd.Function):
         daffinity = torch.reshape(daffinity, (daffinity.shape[0], Q_H, KV_H, daffinity.shape[2], daffinity.shape[3])).sum(1, keepdim=False)
 
         dk_new, dsrc, ddest = _affinity_bwd(k, static_src, static_dest, daffinity)
+        #dk_new, dsrc, ddest = torch.autograd.grad(affinity, [k, static_src, static_dest], grad_outputs=daffinity)
         dk += dk_new
-        return dq, dk, dv, None, None, dsrc, ddest, None
+        return dq[:, :, :, :ctx.HEAD_DIM], dk[:,:,:,:ctx.HEAD_DIM], dv[:,:,:,:ctx.HEAD_DIM], None, None, dsrc, ddest, None
 
 attention = _attention.apply
