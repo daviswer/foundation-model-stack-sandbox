@@ -544,6 +544,8 @@ class LLaMAHeadless(nn.Module):
                 pred = pred.argmax(dim=-1)  # b 1
                 out.append(pred)
                 d_in = pred
+            if rank==0:
+                print(f"Mini-decode loop complete. Internal cache size is {kv1[0].shape}")
             dec_out = torch.cat(out, dim=1)  # b 128
             present_key_value_states.append(kv1)
             present_key_value_states.append(kv2)
