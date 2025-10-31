@@ -516,9 +516,9 @@ class LLaMAHeadless(nn.Module):
             if rank==0:
                 print("Running decoder prefill")
             output = self.decoder[0](enc_out, d_in)
-            output, present_key_value_state = self.decoder[1](output, enc_out, position_ids, past_key_value_states=past_key_value_states[-2])
+            output, present_key_value_state = self.decoder[1](output, enc_out, position_ids, past_key_value_state=past_key_value_states[-2])
             present_key_value_states.append(present_key_value_state)
-            output, present_key_value_state = self.decoder[2](output, enc_out, position_ids, past_key_value_states=past_key_value_states[-1])
+            output, present_key_value_state = self.decoder[2](output, enc_out, position_ids, past_key_value_state=past_key_value_states[-1])
             present_key_value_states.append(present_key_value_state)
             dec_out = None
         else:
