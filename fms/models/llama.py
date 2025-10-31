@@ -157,7 +157,7 @@ class DecoderBlock(nn.Module):
             v=x0,
             position_ids=position_ids,
             past_key_value_state=None,
-            use_cache=use_cache,
+            use_cache=False,  # Never use cache, intra-block only
             attn_name="sdpa_bidirectional",
         )
         if self.config.p_dropout != 0:
