@@ -494,7 +494,7 @@ class LLaMAHeadless(nn.Module):
                 x=x_in,
                 position_ids=position_ids,
                 past_key_value_state=past_key_value_states[i],
-                use_cache=use_cache,
+                use_cache=True,
                 **attn_kwargs,
             )
 
@@ -516,9 +516,9 @@ class LLaMAHeadless(nn.Module):
             if rank==0:
                 print("Running decoder prefill")
             output = self.decoder[0](enc_out, d_in)
-            output, present_key_value_state = self.decoder[1](output, enc_out, position_ids, past_key_value_state=past_key_value_states[-2])
+            output, present_key_value_state = self.decoder[1](output, enc_out, position_ids, use_cache=True, past_key_value_state=past_key_value_states[-2])
             present_key_value_states.append(present_key_value_state)
-            output, present_key_value_state = self.decoder[2](output, enc_out, position_ids, past_key_value_state=past_key_value_states[-1])
+            output, present_key_value_state = self.decoder[2](output, enc_out, position_ids, use_cache=True, past_key_value_state=past_key_value_states[-1])
             present_key_value_states.append(present_key_value_state)
             dec_out = None
         else:
@@ -533,8 +533,8 @@ class LLaMAHeadless(nn.Module):
                 pos[0] = past_key_value_states[-1][0].size(1) + i
                 d_in = self.embedding(d_in)
                 output = self.decoder[0](enc_out[:,i], d_in)
-                output, kv1 = self.decoder[1](output, enc_out, pos, past_key_value_states=kv1)
-                output, kv2 = self.decoder[2](output, enc_out, pos, past_key_value_states=kv2)
+                output, kv1 = self.decoder[1](output, enc_out, pos, use_cache=True, past_key_value_states=kv1)
+                output, kv2 = self.decoder[2](output, enc_out, pos, use_cache=True, past_key_value_states=kv2)
 
                 dec_out = output
                 dec_out = self.dec_norm(dec_out)
