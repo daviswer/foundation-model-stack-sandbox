@@ -549,7 +549,7 @@ class LLaMAHeadless(nn.Module):
             present_key_value_states.append(kv2)
                 
         if rank==0:
-            print(f"Forward pass complete. Out is {out}, kv len is {len(present_key_value_states)}, kv first is {present_key_value_states[0][0].shape}, kv final is {present_key_value_states[-1][0].shape}")
+            print(f"Forward pass complete. Out is {dec_out}, kv len is {len(present_key_value_states)}, kv first is {present_key_value_states[0][0].shape}, kv final is {present_key_value_states[-1][0].shape}")
         return dec_out, present_key_value_states
 
 
