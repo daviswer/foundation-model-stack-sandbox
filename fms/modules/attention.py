@@ -609,7 +609,7 @@ class MultiHeadAttention(nn.Module):
             # attn, affs = self.UA(queries, keys, values, True, 1.3, static_src, static_dest)
 
             r = self.nheads // self.kvheads
-            mask = self.UAOpt(keys, static_src, static_dest, r)  # b h l_q l_k
+            mask = self.UA(keys, static_src, static_dest, r)  # b h l_q l_k
             torch.backends.cuda.enable_math_sdp(False)
             attn = F.scaled_dot_product_attention(
                 queries, 
