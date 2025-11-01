@@ -609,13 +609,13 @@ class MultiHeadAttention(nn.Module):
             # attn, affs = self.UA(queries, keys, values, True, 1.3, static_src, static_dest)
 
             r = self.nheads // self.kvheads
-            mask = self.UA(keys, static_src, static_dest, r)  # b h l_q l_k
+            mask = self.UA(keys, static_src, static_dest)  # b h l_q l_k
             torch.backends.cuda.enable_math_sdp(False)
             attn = F.scaled_dot_product_attention(
                 queries, 
                 torch.repeat_interleave(keys,r,dim=1), 
                 torch.repeat_interleave(values,r,dim=1), 
-                attn_mask=mask,
+                attn_mask=torch.repeat_interleave(mask,r,dim=1),
                 scale=1,
             )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
