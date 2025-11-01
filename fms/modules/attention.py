@@ -34,7 +34,8 @@ from fms.modules.tp import TPModule
 
 from torch.autograd import Function
 
-from ._universal_attention import attention as UAOpt
+# from ._universal_attention import attention as UAOpt
+from ._affinity_generation import _gen_affinity_scores as UAOpt
 
 def get_attention_type():
     pass
@@ -605,20 +606,22 @@ class MultiHeadAttention(nn.Module):
             values = values.transpose(1,2).contiguous()  # b h l d
             rates = static_src
 
-            attn, affs = self.UA(queries, keys, values, True, 1.3, static_src, static_dest)
+            # attn, affs = self.UA(queries, keys, values, True, 1.3, static_src, static_dest)
 
-            # r = self.nheads // self.kvheads
-            # mask = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
-            # torch.backends.cuda.enable_math_sdp(False)
-            # attn = F.scaled_dot_product_attention(
-            #     queries, 
-            #     torch.repeat_interleave(keys,r,dim=1), 
-            #     torch.repeat_interleave(values,r,dim=1), 
-            #     attn_mask=mask,
-            #     scale=1,
-            # )  # b h l d
+            r = self.nheads // self.kvheads
+            mask = self.UAOpt(keys, static_src, static_dest, r)  # b h l_q l_k
+            torch.backends.cuda.enable_math_sdp(False)
+            attn = F.scaled_dot_product_attention(
+                queries, 
+                torch.repeat_interleave(keys,r,dim=1), 
+                torch.repeat_interleave(values,r,dim=1), 
+                attn_mask=mask,
+                scale=1,
+            )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
-            affs = affs.exp()  # b h l
+            # affs = affs.exp()  # b h l
+            # aux = affs.gt(.001).to(dtype=affs.dtype).view(batch_size, -1).mean(-1).add(static.mean().detach()).sub(static.mean())
+            affs = mask.view(batch_size, self.kvheads, -1, mask.size(-2), mask.size(-1))[:,:,0,-1].exp()  # b h l
             aux = affs.gt(.001).to(dtype=affs.dtype).view(batch_size, -1).mean(-1).add(static.mean().detach()).sub(static.mean())
 
             # c = 512
