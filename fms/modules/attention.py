@@ -609,9 +609,8 @@ class MultiHeadAttention(nn.Module):
             # attn, affs = self.UA(queries, keys, values, True, 1.3, static_src, static_dest)
 
             r = self.nheads // self.kvheads
-            pow_two = int(math.ceil(math.log2(xk.shape[-1])))
-            pad_amt = (2**pow_two) - xk.shape[-1]
-            HEAD_DIM = xk.shape[-1]
+            pow_two = int(math.ceil(math.log2(keys.shape[-1])))
+            pad_amt = (2**pow_two) - keys.shape[-1]
             keys_pad = F.pad(keys, (0, pad_amt), "constant", 0)
             mask = self.UA(keys_pad, static_src, static_dest)  # b h l_q l_k
             torch.backends.cuda.enable_math_sdp(False)
