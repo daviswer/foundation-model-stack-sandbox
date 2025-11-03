@@ -660,7 +660,7 @@ class MultiHeadAttention(nn.Module):
         if use_cache:
             return out, (keys, values, rates, affs)
         else:
-            return out, mask.detach().bfloat16()
+            return out, mask.view(batch_size, self.kvheads, -1, q_len, q_len)[:,:,0].detach().bfloat16()
 
     @torch.compile
     def _gen_affinity_scores(self, k, src, dest, r):
