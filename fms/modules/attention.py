@@ -614,8 +614,12 @@ class MultiHeadAttention(nn.Module):
                 scale=1,
             )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
-            affs = mask.view(batch_size, self.kvheads, -1, mask.size(-2), mask.size(-1))[:,:,0,-1].exp()  # b h l
-            aux = affs.gt(.001).to(dtype=affs.dtype).sub(affs.detach()).add(affs).view(batch_size, -1).mean(-1).to(dtype=queries.dtype)
+            affs = mask.view(batch_size, self.kvheads, -1, mask.size(-2), mask.size(-1))[:,:,0].exp()  # b h l l
+            affsm = affs.mean()
+            with torch.no_grad():
+                aux = affs.gt(.001).to(dtype=affs.dtype).mean()  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
+                aux = aux * (2 * q_len / (q_len+1))
+            aux = aux.sub(affsm.detach()).add(affsm)
 
             # c = 512
             # b = batch_size
