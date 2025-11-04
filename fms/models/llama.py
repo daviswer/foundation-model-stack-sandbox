@@ -535,6 +535,8 @@ class LLaMAHeadless(nn.Module):
                 pos[0,0] = past_key_value_states[-1][0].size(1) + i
                 d_in = self.embedding(d_in)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
+                if rank==0:
+                    print(f"Dec merge: inputs {enc_out[0,i,:4].tolist(), d_in[0,0,:4].tolist()}, output {output[0,0,:4]}")
                 output, kv1 = self.decoder[1](output, enc_out, pos, use_cache=True, past_key_value_state=kv1)
                 output, kv2 = self.decoder[2](output, enc_out, pos, use_cache=True, past_key_value_state=kv2)
 
