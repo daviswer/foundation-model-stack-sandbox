@@ -508,7 +508,7 @@ class LLaMAHeadless(nn.Module):
         if rank==0:
             print(f"Encoder complete. Cache length is {len(present_key_value_states)} with item size {present_key_value_states[0][0].shape}")
             if present_key_value_states[0][0].size(2) > 128:
-                print(f"Output 128 is {x_in[0,128,:4].cpu()}")
+                print(f"Output 128 is {x_in[0,0,:4].cpu()}")
         
         # Decoder time!
         enc_out = x_in
