@@ -190,6 +190,10 @@ class MergeMLP(nn.Module):
                 m.reset_parameters()
     
     def forward(self, x, z):
+        rank = int(os.environ["RANK"])
+        if rank==0:
+            print(x[0,256+128,:4])
+            print(z[0,256+128,:4])
         out = torch.cat([self.n1(x), self.n2(z)], dim=-1)
         out = self.out_proj(self.act(self.in_proj(out)))
         return out
