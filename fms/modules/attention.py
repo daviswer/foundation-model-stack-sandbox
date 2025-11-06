@@ -958,6 +958,7 @@ class GatedMultiHeadAttention(nn.Module):
             if rank==0 and verbose:
                 print(queries[0,-1,0,:4], queries.shape)
                 print(keys_compute[0,0,-1,:4], keys_compute.shape)
+                print(position_ids)
             attn = attn_compute_dict["compute_prefill"](
                 queries,
                 keys_compute,
