@@ -138,7 +138,7 @@ class DecoderBlock(nn.Module):
             position_ids=position_ids,
             past_key_value_state=self_attn_past_key_value,
             use_cache=use_cache,
-            attn_name="sdpa_causal" if self_attn_past_key_value is None else "sdpa_bidirectional",
+            attn_name="sdpa_causal",
         )
         cache = None
         if use_cache:
