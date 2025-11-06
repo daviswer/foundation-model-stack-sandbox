@@ -139,6 +139,7 @@ class DecoderBlock(nn.Module):
             past_key_value_state=self_attn_past_key_value,
             use_cache=use_cache,
             attn_name="sdpa_causal",
+            verbose=x.size(1)==1,
         )
         cache = None
         if use_cache:
