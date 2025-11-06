@@ -956,7 +956,8 @@ class GatedMultiHeadAttention(nn.Module):
         rank = int(os.environ["RANK"])
         if attn_compute_dict["is_prefill"](**attn_kwargs):
             if rank==0 and verbose:
-                print("WORLD A")
+                print(queries[0,0,:4])
+                print(keys_compute.shape)
             attn = attn_compute_dict["compute_prefill"](
                 queries,
                 keys_compute,
@@ -968,10 +969,6 @@ class GatedMultiHeadAttention(nn.Module):
                 **attn_kwargs,
             )
         else:
-            if rank==0 and verbose:
-                print("WORLD B")
-                print(queries[0,0,:4])
-                print(keys_compute.shape)
             attn = attn_compute_dict["compute_decode"](
                 queries,
                 keys_compute,
