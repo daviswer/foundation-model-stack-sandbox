@@ -891,6 +891,7 @@ class GatedMultiHeadAttention(nn.Module):
         position_ids=None,
         past_key_value_state: Optional[Tuple[Tensor | None, Tensor | None]] = None,
         use_cache=False,
+        verbose=False,
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
         """
@@ -951,7 +952,10 @@ class GatedMultiHeadAttention(nn.Module):
         else:
             keys_compute, values_compute = keys, values
 
+        rank = int(os.environ["RANK"])
         if attn_compute_dict["is_prefill"](**attn_kwargs):
+            if rank==0 and verbose:
+                print("WORLD A")
             attn = attn_compute_dict["compute_prefill"](
                 queries,
                 keys_compute,
@@ -963,6 +967,10 @@ class GatedMultiHeadAttention(nn.Module):
                 **attn_kwargs,
             )
         else:
+            if rank==0 and verbose:
+                print("WORLD B")
+                print(queries[0,0,:4])
+                print(keys_compute.shape)
             attn = attn_compute_dict["compute_decode"](
                 queries,
                 keys_compute,
