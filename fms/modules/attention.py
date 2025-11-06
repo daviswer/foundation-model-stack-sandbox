@@ -953,12 +953,7 @@ class GatedMultiHeadAttention(nn.Module):
         else:
             keys_compute, values_compute = keys, values
 
-        rank = int(os.environ["RANK"])
         if attn_compute_dict["is_prefill"](**attn_kwargs):
-            if rank==0 and verbose:
-                print(queries[0,-1,0,:4], queries.shape)
-                print(keys_compute[0,0,-1,:4], keys_compute.shape)
-                print(position_ids)
             attn = attn_compute_dict["compute_prefill"](
                 queries,
                 keys_compute,
