@@ -148,6 +148,10 @@ class DecoderBlock(nn.Module):
         # residual connection
         x = x + residual
 
+        rank = int(os.environ["RANK"])
+        if rank==0:
+            print("POST SELF:", x[0,0,:4])
+
         # then we do Cross-Attn and Add&Norm
         residual = x
         x = self.c_ln(x)
@@ -164,6 +168,9 @@ class DecoderBlock(nn.Module):
             x = self.dropout(x)
         # another residual
         x = x + residual
+        
+        if rank==0:
+            print("POST CROSS:", x[0,0,:4])
 
         if use_cache:
             return (x, cache)
