@@ -537,6 +537,8 @@ class LLaMAHeadless(nn.Module):
             (kv1, kv2) = past_key_value_states[-2], past_key_value_states[-1]
             for i in range(128):
                 pos[0,0] = past_key_value_states[-1][0].size(1) + i
+                if rank==0:
+                    print(f"    DEC INP: {d_in[0][0]}")
                 d_in = self.embedding(d_in)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
                 if rank==0:
