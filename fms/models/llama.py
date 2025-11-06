@@ -548,6 +548,8 @@ class LLaMAHeadless(nn.Module):
 
                 dec_out = output
                 dec_out = self.dec_norm(dec_out)
+                if rank==0:
+                    print(f"    DEC OUTP: {dec_out[0,0,:4]}")
                 if self.config.p_dropout:
                     dec_out = self.dropout(dec_out)
                 pred = head(dec_out)  # b 1 v
