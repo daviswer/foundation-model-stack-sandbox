@@ -544,7 +544,7 @@ class LLaMAHeadless(nn.Module):
             pos = torch.empty(1, 1, device=d_in.device, dtype=torch.int)
             (kv1, kv2) = past_key_value_states[-2], past_key_value_states[-1]
             for i in range(128):
-                pos[0,0] = past_key_value_states[-1][0].size(1) + i
+                pos[0,0] = past_key_value_states[-1][0].size(2) + i
                 if rank==0:
                     print(f"    DEC INP: {d_in[0][0]}")
                 d_in = self.embedding(d_in)
