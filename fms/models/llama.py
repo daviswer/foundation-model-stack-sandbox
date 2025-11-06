@@ -139,7 +139,6 @@ class DecoderBlock(nn.Module):
             past_key_value_state=self_attn_past_key_value,
             use_cache=use_cache,
             attn_name="sdpa_causal",
-            verbose=x.size(1)==1,
         )
         cache = None
         if use_cache:
@@ -148,10 +147,6 @@ class DecoderBlock(nn.Module):
             x = self.dropout(x)
         # residual connection
         x = x + residual
-
-        rank = int(os.environ["RANK"])
-        if rank==0:
-            print("POST SELF:", x[0,0,:4])
 
         # then we do Cross-Attn and Add&Norm
         residual = x
@@ -169,9 +164,6 @@ class DecoderBlock(nn.Module):
             x = self.dropout(x)
         # another residual
         x = x + residual
-        
-        if rank==0:
-            print("POST CROSS:", x[0,0,:4])
 
         if use_cache:
             return (x, cache)
@@ -198,10 +190,6 @@ class MergeMLP(nn.Module):
                 m.reset_parameters()
     
     def forward(self, x, z):
-        rank = int(os.environ["RANK"])
-        if rank==0:
-            print(x[0,0,:4])
-            print(z[0,0,:4])
         out = torch.cat([self.n1(x), self.n2(z)], dim=-1)
         out = self.out_proj(self.act(self.in_proj(out)))
         return out
@@ -549,15 +537,11 @@ class LLaMAHeadless(nn.Module):
                     print(f"    DEC INP: {d_in[0][0]}")
                 d_in = self.embedding(d_in)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
-                if rank==0:
-                    print(f"Dec merge: inputs {enc_out[0,i,:4].tolist(), d_in[0,0,:4].tolist()}, output {output[0,0,:4]}")
                 output, kv1 = self.decoder[1](output, enc_out, pos, use_cache=True, past_key_value_state=kv1)
                 output, kv2 = self.decoder[2](output, enc_out, pos, use_cache=True, past_key_value_state=kv2)
 
                 dec_out = output
                 dec_out = self.dec_norm(dec_out)
-                if rank==0:
-                    print(f"    DEC OUTP: {dec_out[0,0,:4]}")
                 if self.config.p_dropout:
                     dec_out = self.dropout(dec_out)
                 pred = head(dec_out)  # b 1 v
