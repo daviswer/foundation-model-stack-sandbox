@@ -145,7 +145,10 @@ class InjectAux(Function):
         q_len = affs.size(-1)
         aux = aux * (2 * q_len / (q_len+1))
         return affs, aux
-    
+    @staticmethod
+    def setup_context(ctx, inputs, output):
+        return super().setup_context(ctx, inputs, output)
+    @staticmethod
     def backward(ctx, g_affs, g_aux):
         return g_affs+g_aux, None
     
