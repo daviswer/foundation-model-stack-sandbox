@@ -606,9 +606,7 @@ class MultiHeadAttention(nn.Module):
             r = self.nheads // self.kvheads
             mask, mask_slim = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
 
-            aux = mask_slim.gt(.001).sum()  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
-            aux = aux * (2 * q_len / (q_len+1) / mask_slim.numel())
-            # aux = 0
+            aux = self._calc_aux(mask_slim)
 
             # affs = mask.view(batch_size, self.kvheads, -1, mask.size(-2), mask.size(-1))[:,:,0].exp()  # b h l l
             # affsm = affs.mean()
@@ -678,10 +676,18 @@ class MultiHeadAttention(nn.Module):
         affinity = torch.einsum('bnqh, bnkh -> bnqk', k*dest.sqrt().unsqueeze(-1), k*src.sqrt().unsqueeze(-1)).relu().float().pow(2/3)
         affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())
         affinity = affinity.tril(-1).cumsum(2).to(dtype=k.dtype)
-        mask = affinity.exp().tril()
+        mask = affinity.exp()
         affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).triu(1), float('-inf'))
         return torch.repeat_interleave(affinity,r,dim=1), mask
-        # return affinity
+
+    @torch.compile
+    def _calc_aux(mask_slim):
+        q_len = mask_slim.size(-1)
+        triu_count = q_len*(q_len-1)/2*mask_slim.size(0)*mask_slim.size(1)
+        aux = mask_slim.gt(.001).sum().sub(triu_count)  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
+        aux = aux * (2 * q_len / (q_len+1) / mask_slim.numel())
+        return aux
+
 
 
 
