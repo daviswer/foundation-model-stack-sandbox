@@ -681,7 +681,7 @@ class MultiHeadAttention(nn.Module):
         return torch.repeat_interleave(affinity,r,dim=1), mask
 
     @torch.compile
-    def _calc_aux(mask_slim):
+    def _calc_aux(self, mask_slim):
         q_len = mask_slim.size(-1)
         triu_count = q_len*(q_len-1)/2*mask_slim.size(0)*mask_slim.size(1)
         aux = mask_slim.gt(.001).sum().sub(triu_count)  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
