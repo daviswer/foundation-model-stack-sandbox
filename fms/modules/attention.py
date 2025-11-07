@@ -604,7 +604,7 @@ class MultiHeadAttention(nn.Module):
             rates = static_src
 
             r = self.nheads // self.kvheads
-            mask = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
+            mask, aux = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
             torch.backends.cuda.enable_math_sdp(False)
             attn = F.scaled_dot_product_attention(
                 queries, 
@@ -614,12 +614,7 @@ class MultiHeadAttention(nn.Module):
                 scale=1,
             )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
-            affs = mask.view(batch_size, self.kvheads, -1, mask.size(-2), mask.size(-1))[:,:,0].exp()  # b h l l
-            affsm = affs.mean()
-            with torch.no_grad():
-                aux = affs.gt(.001).to(dtype=affs.dtype).mean()  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
-                aux = aux * (2 * q_len / (q_len+1))
-            aux = aux.sub(affsm.detach()).add(affsm)
+            
 
             # c = 512
             # b = batch_size
@@ -673,7 +668,14 @@ class MultiHeadAttention(nn.Module):
         affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())
         affinity = affinity.triu(1).cumsum(3).to(dtype=k.dtype)
         affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).tril(-1), -1e12).transpose(-1, -2)
-        return torch.repeat_interleave(affinity,r,dim=1)
+        # Aux
+        affsm = affinity.mean()
+        with torch.no_grad():
+            aux = affinity.gt(.001).sum()  # mean *l*l / (l*(l+1)/2)  =  sum / numel * 2l/(l+1)
+            q_len = affinity.size(-1)
+            aux = aux * (2 * q_len / (q_len+1) / affinity.numel())
+        aux = aux.sub(affsm.detach()).add(affsm)
+        return torch.repeat_interleave(affinity,r,dim=1), aux
 
 
 
