@@ -140,8 +140,8 @@ class UniversalAttention(Function):
 
 class InjectAux(Function):
     @staticmethod
-    def forward(affs):
-        aux = affs.exp().gt(.001).sum()  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
+    def forward(affs, r):
+        aux = affs[affs.size(0), -1, r, *affs.size()[2:]].exp().gt(.001).sum()  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
         q_len = affs.size(-1)
         aux = aux * (2 * q_len / (q_len+1) / affs.numel())
         return affs, aux
