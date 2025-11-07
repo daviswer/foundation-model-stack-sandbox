@@ -147,7 +147,7 @@ class InjectAux(Function):
         return affs, aux
     @staticmethod
     def setup_context(ctx, inputs, output):
-        return super().setup_context(ctx, inputs, output)
+        pass
     @staticmethod
     def backward(ctx, g_affs, g_aux):
         return g_affs+g_aux, None
