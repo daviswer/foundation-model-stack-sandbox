@@ -138,21 +138,6 @@ class UniversalAttention(Function):
 
         return dkc,dvc,dxq,dstat_src,dstat_dest
 
-class InjectAux(Function):
-    @staticmethod
-    def forward(affs, r):
-        aux = affs.view(affs.size(0), -1, r, *affs.size()[2:])[:,:,0].exp().gt(.001).sum()  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
-        q_len = affs.size(-1)
-        aux = aux * (2 * q_len / (q_len+1) / affs.numel())
-        return affs, aux
-    @staticmethod
-    def setup_context(ctx, inputs, output):
-        pass
-    @staticmethod
-    def backward(ctx, g_affs, g_aux):
-        return g_affs+g_aux/g_affs.numel(), None
-    
-inject_aux = InjectAux.apply
 
 class SMVecMatMul(Function):
     @staticmethod
@@ -620,25 +605,21 @@ class MultiHeadAttention(nn.Module):
 
             r = self.nheads // self.kvheads
             mask = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
-
-            mask, aux = inject_aux(mask, r)
-
-            # affs = mask.view(batch_size, self.kvheads, -1, mask.size(-2), mask.size(-1))[:,:,0].exp()  # b h l l
-            # affsm = affs.mean()
-            # with torch.no_grad():
-            #     aux = affs.gt(.001).to(dtype=affs.dtype).mean()  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
-            #     aux = aux * (2 * q_len / (q_len+1))
-            # aux = aux.sub(affsm.detach()).add(affsm)
-
             torch.backends.cuda.enable_math_sdp(False)
             attn = F.scaled_dot_product_attention(
                 queries, 
                 torch.repeat_interleave(keys,r,dim=1), 
                 torch.repeat_interleave(values,r,dim=1), 
-                attn_mask=mask,  # torch.repeat_interleave(mask,r,dim=1),
+                attn_mask=mask,
                 scale=1,
             )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
+            affs = mask.view(batch_size, self.kvheads, -1, mask.size(-2), mask.size(-1))[:,:,0].exp()  # b h l l
+            affsm = affs.mean()
+            with torch.no_grad():
+                aux = affs.gt(.001).sum()  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
+                aux = aux * (2 * q_len / (q_len+1) / affs.numel())
+            aux = aux.sub(affsm.detach()).add(affsm)
 
             # c = 512
             # b = batch_size
@@ -693,7 +674,6 @@ class MultiHeadAttention(nn.Module):
         affinity = affinity.triu(1).cumsum(3).to(dtype=k.dtype)
         affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).tril(-1), -1e12).transpose(-1, -2)
         return torch.repeat_interleave(affinity,r,dim=1)
-        # return affinity
 
 
 
