@@ -675,11 +675,12 @@ class MultiHeadAttention(nn.Module):
 
     @torch.compile
     def _gen_affinity_scores(self, k, src, dest, r):
-        affinity = torch.einsum('bnqh, bnkh -> bnqk', k*src.sqrt().unsqueeze(-1), k*dest.sqrt().unsqueeze(-1)).relu().float().pow(2/3)
+        affinity = torch.einsum('bnqh, bnkh -> bnqk', k*dest.sqrt().unsqueeze(-1), k*src.sqrt().unsqueeze(-1)).relu().float().pow(2/3)
         affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())
-        affinity = affinity.triu(1).cumsum(3).to(dtype=k.dtype)
-        affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).tril(-1), -1e12).transpose(-1, -2)
-        return torch.repeat_interleave(affinity,r,dim=1), affinity.exp()
+        affinity = affinity.tril(-1).cumsum(2).to(dtype=k.dtype)
+        mask = affinity.exp().tril()
+        affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).triu(1), float('-inf'))
+        return torch.repeat_interleave(affinity,r,dim=1), mask
         # return affinity
 
 
