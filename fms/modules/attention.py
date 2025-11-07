@@ -140,8 +140,8 @@ class UniversalAttention(Function):
 
 class InjectAux(Function):
     @staticmethod
-    def forward(affs, r):
-        aux = affs.view(affs.size(0), -1, r, *affs.size()[2:])[:,:,0].exp().gt(.001).sum()  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
+    def forward(affs):
+        aux = affs.gt(.001).sum()  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
         q_len = affs.size(-1)
         aux = aux * (2 * q_len / (q_len+1) / affs.numel())
         return affs, aux
@@ -619,9 +619,9 @@ class MultiHeadAttention(nn.Module):
             rates = static_src
 
             r = self.nheads // self.kvheads
-            mask = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
+            mask, mask_slim = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
 
-            mask, aux = inject_aux(mask, r)
+            aux = inject_aux(mask_slim)
 
             # affs = mask.view(batch_size, self.kvheads, -1, mask.size(-2), mask.size(-1))[:,:,0].exp()  # b h l l
             # affsm = affs.mean()
@@ -692,7 +692,7 @@ class MultiHeadAttention(nn.Module):
         affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())
         affinity = affinity.triu(1).cumsum(3).to(dtype=k.dtype)
         affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).tril(-1), -1e12).transpose(-1, -2)
-        return torch.repeat_interleave(affinity,r,dim=1)
+        return torch.repeat_interleave(affinity,r,dim=1), affinity.exp()
         # return affinity
 
 
