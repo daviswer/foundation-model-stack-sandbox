@@ -141,7 +141,7 @@ class UniversalAttention(Function):
 class InjectAux(Function):
     @staticmethod
     def forward(affs):
-        aux = affs.exp().gt(.001).to(dtype=affs.dtype).sum()  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
+        aux = affs.exp().gt(.001).sum()  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
         q_len = affs.size(-1)
         aux = aux * (2 * q_len / (q_len+1) / affs.numel())
         return affs, aux
@@ -152,7 +152,7 @@ class InjectAux(Function):
     def backward(ctx, g_affs, g_aux):
         return g_affs+g_aux/g_affs.numel(), None
     
-inject_aux = torch.compile(InjectAux.apply)
+inject_aux = InjectAux.apply
 
 class SMVecMatMul(Function):
     @staticmethod
@@ -635,7 +635,7 @@ class MultiHeadAttention(nn.Module):
                 queries, 
                 torch.repeat_interleave(keys,r,dim=1), 
                 torch.repeat_interleave(values,r,dim=1), 
-                attn_mask=torch.repeat_interleave(mask,r,dim=1),
+                attn_mask=mask,  # torch.repeat_interleave(mask,r,dim=1),
                 scale=1,
             )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
@@ -692,8 +692,8 @@ class MultiHeadAttention(nn.Module):
         affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())
         affinity = affinity.triu(1).cumsum(3).to(dtype=k.dtype)
         affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).tril(-1), -1e12).transpose(-1, -2)
-        # return torch.repeat_interleave(affinity,r,dim=1)
-        return affinity
+        return torch.repeat_interleave(affinity,r,dim=1)
+        # return affinity
 
 
 
