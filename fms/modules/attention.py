@@ -623,7 +623,6 @@ class MultiHeadAttention(nn.Module):
 
             mask, aux = inject_aux(mask)
 
-            # attn = attn.transpose(1,2).contiguous()  # b l h d
             # affs = mask.view(batch_size, self.kvheads, -1, mask.size(-2), mask.size(-1))[:,:,0].exp()  # b h l l
             # affsm = affs.mean()
             # with torch.no_grad():
@@ -639,6 +638,7 @@ class MultiHeadAttention(nn.Module):
                 attn_mask=torch.repeat_interleave(mask,r,dim=1),
                 scale=1,
             )  # b h l d
+            attn = attn.transpose(1,2).contiguous()  # b l h d
 
             # c = 512
             # b = batch_size
