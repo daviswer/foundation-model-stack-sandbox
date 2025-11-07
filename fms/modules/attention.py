@@ -621,7 +621,7 @@ class MultiHeadAttention(nn.Module):
             r = self.nheads // self.kvheads
             mask = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
 
-            mask, aux = inject_aux(mask)
+            mask, aux = inject_aux(mask, r)
 
             # affs = mask.view(batch_size, self.kvheads, -1, mask.size(-2), mask.size(-1))[:,:,0].exp()  # b h l l
             # affsm = affs.mean()
