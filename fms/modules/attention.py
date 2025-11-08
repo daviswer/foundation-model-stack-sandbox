@@ -1,6 +1,7 @@
 import abc
 import functools
 import math
+import os
 from typing import (
     Any,
     Callable,
@@ -147,6 +148,10 @@ class PassThresh(Function):
         pass
     @staticmethod
     def backward(ctx, g):
+        rank = int(os.environ["RANK"])
+        if rank==0:
+            print(g[:,0,-4:,-4:])
+            assert False
         return g
 pass_thresh = PassThresh.apply
 
