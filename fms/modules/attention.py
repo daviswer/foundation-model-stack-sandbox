@@ -142,10 +142,12 @@ class UniversalAttention(Function):
 class PassThresh(Function):
     @staticmethod
     def forward(mask):
-        return mask.gt(.001)
+        return mask.gt(.001).sum(-1).to(dtype=mask.dtype)
     @staticmethod
     def setup_context(ctx, inputs, output):
-        pass
+        mask = inputs[0]
+        ctx.dim0 = mask.size(0)
+        ctx.dim1 = mask.size(1)
     @staticmethod
     def backward(ctx, g):
         print("GOTHERE")
@@ -153,7 +155,7 @@ class PassThresh(Function):
         if rank==0:
             print(g[:,0,-4:,-4:])
             assert False
-        return g
+        return g[:,None].expand(ctx.dim0, ctx.dim1)
 pass_thresh = PassThresh.apply
 
 class SMVecMatMul(Function):
@@ -701,7 +703,7 @@ class MultiHeadAttention(nn.Module):
     def _calc_aux(self, mask):
         q_len = mask.size(-1)
         triu_count = q_len*(q_len-1)/2*mask.size(1)  # per seq
-        aux = pass_thresh(mask).view(mask.size(0),-1).sum(-1).sub(triu_count)  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
+        aux = pass_thresh(mask.view(mask.size(0),-1)).sub(triu_count)  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
         aux = aux * (2 * q_len / (q_len+1) / (mask.numel()//mask.size(0)))
         return aux
 
