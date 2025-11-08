@@ -142,15 +142,13 @@ class UniversalAttention(Function):
 class PassThresh(Function):
     @staticmethod
     def forward(mask):
-        rank = int(os.environ["RANK"])
-        if rank==0:
-            print("GOTHERE")
         return mask.gt(.001)
     @staticmethod
     def setup_context(ctx, inputs, output):
         pass
     @staticmethod
     def backward(ctx, g):
+        print("GOTHERE")
         rank = int(os.environ["RANK"])
         if rank==0:
             print(g[:,0,-4:,-4:])
