@@ -142,6 +142,9 @@ class UniversalAttention(Function):
 class PassThresh(Function):
     @staticmethod
     def forward(mask):
+        rank = int(os.environ["RANK"])
+        if rank==0:
+            print("GOTHERE")
         return mask.gt(.001)
     @staticmethod
     def setup_context(ctx, inputs, output):
@@ -696,7 +699,7 @@ class MultiHeadAttention(nn.Module):
         affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).triu(1), float('-inf'))
         return torch.repeat_interleave(affinity,r,dim=1), mask
 
-    @torch.compile
+    # @torch.compile
     def _calc_aux(self, mask):
         q_len = mask.size(-1)
         triu_count = q_len*(q_len-1)/2*mask.size(1)  # per seq
