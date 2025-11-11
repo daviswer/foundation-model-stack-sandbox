@@ -547,7 +547,7 @@ class LLaMAHeadless(nn.Module):
                 pred = head(dec_out)  # b 1 v
                 pred = pred.argmax(dim=-1)  # b 1
                 out.append(pred)
-                d_in = torch.ones_like(pred) * 20965  # pred
+                d_in = torch.ones_like(pred) * pred
             if rank==0:
                 print(f"Mini-decode loop complete. Internal cache size is {kv1[0].shape}")
             dec_out = torch.cat(out, dim=1)  # b 128
