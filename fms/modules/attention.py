@@ -656,9 +656,9 @@ class MultiHeadAttention(nn.Module):
 
         # You want to apply rotary embeddings pre-cache
         if self.position_encoder is not None:
-            # if self.cp_mesh is not None:
-            #     if position_ids is None:
-            #         raise ValueError("Must pass posids manually when using context parallel")
+            if self.cp_mesh is not None:
+                if position_ids is None:
+                    raise ValueError("Must pass posids manually when using context parallel")
             queries, keys = self.position_encoder.adjusted_qk(
                 queries, keys, position_ids, past_key_value_state, use_cache
             )
@@ -687,7 +687,7 @@ class MultiHeadAttention(nn.Module):
                 keys_compute,
                 values_compute,
                 causal = True,
-                sofmax_scale = self.scale_factor,
+                softmax_scale = self.scale_factor,
                 group = self.cp_mesh.get_group(),
                 dropout = 0.0,
             )
