@@ -356,6 +356,7 @@ class RotaryEmbedding(PositionEncoder):
         freqs = self.cached_freqs[q.device.index][alpha][position_ids]
 
         freqs = freqs.float()  # 1 L D/2 2 2
+        print(freqs.shape, q_.shape, k_.shape)
         q_out = (
             freqs[:, -q.size(1) :, None, :, :, :]
             .mul(q_.unsqueeze(-2))
