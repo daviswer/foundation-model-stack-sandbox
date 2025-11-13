@@ -355,8 +355,6 @@ class RotaryEmbedding(PositionEncoder):
         max_start_pos = torch.max(position_ids[:, 0])
         alpha = self.compute_freqs_cis(q.device, max_start_pos + seq_len)
         freqs = self.cached_freqs[q.device.index][alpha][position_ids]
-        print(position_ids[0,:8], position_ids.shape)
-        time.sleep(10)
 
         freqs = freqs.float()  # 1 L D/2 2 2
         q_out = (
