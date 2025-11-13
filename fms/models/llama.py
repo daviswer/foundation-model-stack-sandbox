@@ -67,6 +67,7 @@ class LLaMABlock(nn.Module):
         super(LLaMABlock, self).__init__()
         self.config = config
         self.cp_mesh = cp_mesh
+        print("SETUP:", cp_mesh)
         emb_kq = self.config.emb_dim // self.config.nheads
         emb_v = self.config.emb_dim // self.config.nheads
 
@@ -138,6 +139,7 @@ class LLaMABlock(nn.Module):
         # first we do MHA and Add&Norm
         residual = x
         x = self.ln(x)
+        print("FORWARD", self.cp_mesh)
         x = self.attn(
             q=x,
             position_ids=position_ids,
