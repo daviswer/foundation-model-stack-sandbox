@@ -13,7 +13,9 @@ from typing_extensions import NotRequired, Unpack
 
 import torch
 import torch.distributed
+from ring_flash_attn import ring_flash_attn_func
 from torch import Tensor, nn
+from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.distributed_c10d import ProcessGroup
 from torch.nn import functional as F
 
@@ -560,6 +562,7 @@ class MultiHeadAttention(nn.Module):
         fused: bool = True,
         linear_config: Optional[Mapping[str, Any]] = None,
         scale_factor: Optional[float] = None,
+        cp_mesh: DeviceMesh | None = None,
     ):
         super(MultiHeadAttention, self).__init__()
         self.nheads = nheads
@@ -572,6 +575,7 @@ class MultiHeadAttention(nn.Module):
         self.fused = fused
         self.linear_config = linear_config
         self.scale_factor = scale_factor
+        self.cp_mesh = cp_mesh
 
         self.in_proj: QKV = (FusedQKV if self.fused else UnfusedQKV)(
             self.emb_dim,
@@ -652,6 +656,9 @@ class MultiHeadAttention(nn.Module):
 
         # You want to apply rotary embeddings pre-cache
         if self.position_encoder is not None:
+            if self.cp_mesh is not None:
+                if position_ids is None:
+                    raise ValueError("Must pass posids manually when using context parallel")
             queries, keys = self.position_encoder.adjusted_qk(
                 queries, keys, position_ids, past_key_value_state, use_cache
             )
@@ -674,7 +681,17 @@ class MultiHeadAttention(nn.Module):
         else:
             keys_compute, values_compute = keys, values
 
-        if attn_compute_dict["is_prefill"](**attn_kwargs):
+        if self.cp_mesh is not None:
+            attn = ring_flash_attn_func(
+                queries,
+                keys_compute,
+                values_compute,
+                causal = True,
+                sofmax_scale = self.scale_factor,
+                group = self.cp_mesh.get_group(),
+                dropout = 0.0,
+            )
+        elif attn_compute_dict["is_prefill"](**attn_kwargs):
             attn = attn_compute_dict["compute_prefill"](
                 queries,
                 keys_compute,
