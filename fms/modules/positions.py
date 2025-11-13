@@ -328,6 +328,9 @@ class RotaryEmbedding(PositionEncoder):
         assert len(q.size()) == 4
         assert len(k.size()) == 4
 
+        assert position_ids is not None
+        print(position_ids.device, position_ids.shape)
+
         seq_len = max(k.size(1), q.size(1))
         if position_ids is None:
             # Compute position_ids based on cache config
