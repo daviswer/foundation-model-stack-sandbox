@@ -6,6 +6,7 @@ from typing_extensions import Unpack
 
 import torch
 import torch.nn as nn
+from torch.distributed.device_mesh import DeviceMesh
 
 from fms import models
 from fms.distributed.strategy import (
@@ -62,9 +63,10 @@ class LLaMAConfig(ModelConfig):
 
 
 class LLaMABlock(nn.Module):
-    def __init__(self, config: LLaMAConfig, rotary_emb: RotaryEmbedding):
+    def __init__(self, config: LLaMAConfig, rotary_emb: RotaryEmbedding, cp_mesh: DeviceMesh | None):
         super(LLaMABlock, self).__init__()
         self.config = config
+        self.cp_mesh = cp_mesh
         emb_kq = self.config.emb_dim // self.config.nheads
         emb_v = self.config.emb_dim // self.config.nheads
 
@@ -141,6 +143,7 @@ class LLaMABlock(nn.Module):
             position_ids=position_ids,
             past_key_value_state=self_attn_past_key_value,
             use_cache=use_cache,
+            cp_mesh=self.cp_mesh
             **attn_kwargs,
         )
         cache = None
@@ -171,6 +174,7 @@ class LLaMA(nn.Module):
         self,
         config: Optional[LLaMAConfig] = None,
         distributed_strategy: DistributedStrategy = NoOpStrategy,
+        cp_mesh: DeviceMesh | None = None,
         **kwargs,
     ):
         super(LLaMA, self).__init__()
@@ -180,6 +184,7 @@ class LLaMA(nn.Module):
             self.config = LLaMAConfig()
         self.config = self.config.updated(**kwargs)
         self.distributed_strategy = distributed_strategy
+        self.mesh = cp_mesh
 
         self.width = self.config.emb_dim
         self.pad_id = self.config.pad_id
@@ -224,7 +229,7 @@ class LLaMA(nn.Module):
 
         layers = []
         for i in range(self.config.nlayers):
-            block: nn.Module = LLaMABlock(self.config, self.rot_emb)
+            block: nn.Module = LLaMABlock(self.config, self.rot_emb, self.mesh)
             block = self.distributed_strategy.distribute_layer(block, i)
             layers.append(block)
         self.layers = nn.ModuleList(layers)
