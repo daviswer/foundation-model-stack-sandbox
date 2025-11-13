@@ -682,6 +682,7 @@ class MultiHeadAttention(nn.Module):
             keys_compute, values_compute = keys, values
 
         if self.cp_mesh is not None:
+            print("GOTHERE")
             attn = ring_flash_attn_func(
                 queries,
                 keys_compute,
