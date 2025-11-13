@@ -143,7 +143,7 @@ class LLaMABlock(nn.Module):
             position_ids=position_ids,
             past_key_value_state=self_attn_past_key_value,
             use_cache=use_cache,
-            cp_mesh=self.cp_mesh
+            cp_mesh=self.cp_mesh,
             **attn_kwargs,
         )
         cache = None
