@@ -329,7 +329,7 @@ class RotaryEmbedding(PositionEncoder):
         assert len(k.size()) == 4
 
         assert position_ids is not None
-        print(position_ids.device, position_ids.shape)
+        print(position_ids.device, position_ids.shape, position_ids[0,:8], q.device, k.device)
 
         seq_len = max(k.size(1), q.size(1))
         if position_ids is None:
@@ -358,6 +358,8 @@ class RotaryEmbedding(PositionEncoder):
         max_start_pos = torch.max(position_ids[:, 0])
         alpha = self.compute_freqs_cis(q.device, max_start_pos + seq_len)
         freqs = self.cached_freqs[q.device.index][alpha][position_ids]
+        time.sleep(10)
+        print(position_ids.device, position_ids.shape, position_ids[0,:8], q.device, k.device)
 
         freqs = freqs.float()  # 1 L D/2 2 2
         q_out = (
