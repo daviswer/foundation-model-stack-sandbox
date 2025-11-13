@@ -67,7 +67,6 @@ class LLaMABlock(nn.Module):
         super(LLaMABlock, self).__init__()
         self.config = config
         self.cp_mesh = cp_mesh
-        print("SETUP:", cp_mesh)
         emb_kq = self.config.emb_dim // self.config.nheads
         emb_v = self.config.emb_dim // self.config.nheads
 
@@ -105,6 +104,7 @@ class LLaMABlock(nn.Module):
             position_encoder=rotary_emb,
             fused=self.config.fused_weights,
             linear_config=self.config.linear_config,
+            cp_mesh=self.cp_mesh,
         )
         self.ff_sub_layer = GatedLinearUnit(
             self.config.emb_dim,
@@ -139,13 +139,11 @@ class LLaMABlock(nn.Module):
         # first we do MHA and Add&Norm
         residual = x
         x = self.ln(x)
-        print("FORWARD", self.cp_mesh)
         x = self.attn(
             q=x,
             position_ids=position_ids,
             past_key_value_state=self_attn_past_key_value,
             use_cache=use_cache,
-            cp_mesh=self.cp_mesh,
             **attn_kwargs,
         )
         cache = None
