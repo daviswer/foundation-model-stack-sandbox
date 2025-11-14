@@ -689,7 +689,7 @@ class MultiHeadAttention(nn.Module):
                 causal = True,
                 softmax_scale = self.scale_factor,
                 group = self.cp_mesh.get_group(),
-                dropout = 0.0,
+                dropout_p = 0.0,
             )
         elif attn_compute_dict["is_prefill"](**attn_kwargs):
             attn = attn_compute_dict["compute_prefill"](
