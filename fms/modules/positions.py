@@ -137,7 +137,7 @@ class UnRopeScalingImpl(RopeNoScalingImpl):
         dim = self.dim
 
         logstart = math.log(2*math.pi / ratio)  # 1 cycle in ratio steps
-        logend = math.log(4*math.pi / 32768)  # 2 cycles in 32k steps
+        logend = math.log(4*math.pi / 32768 / 4)  # 2 cycles in 128k steps
         pos = torch.arange(0, dim//2, device=device) / (dim//2-1)
         logfreq = pos*(logend-logstart) + logstart
         freqs = logfreq.exp()
