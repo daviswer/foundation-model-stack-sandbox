@@ -662,6 +662,7 @@ class MultiHeadAttention(nn.Module):
             queries, keys = self.position_encoder.adjusted_qk(
                 queries, keys, position_ids, past_key_value_state, use_cache
             )
+        queries = queries * (1+.1*torch.arange(q_len, device=queries.device).div(4096).max(torch.ones(q_len, device=queries.device)).log())**2
 
         attn_compute_dict = get_attention_type(**attn_kwargs)
 
