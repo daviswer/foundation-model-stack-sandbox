@@ -692,16 +692,12 @@ class MultiHeadAttention(nn.Module):
         affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())
         affinity = affinity.tril(-1).cumsum(2).to(dtype=k.dtype)
         mask = affinity.exp()
-        print(mask[0,0,-1,:8])
         affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).triu(1), float('-inf'))
         return torch.repeat_interleave(affinity,r,dim=1), mask
 
     @torch.compile
     def _calc_aux(self, mask):
         aux = pass_thresh(mask)
-        print(aux)
-        print(mask[:,:,-1].gt(.001).view(mask.size(0),-1).sum(-1).to(dtype=mask.dtype).div(mask.size(1)*mask.size(3)))
-        print()
         return aux
         
 
