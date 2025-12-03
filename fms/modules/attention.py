@@ -151,9 +151,8 @@ class PassThresh(Function):
         ctx.dim1 = mask.size(3)
     @staticmethod
     def backward(ctx, g):
-        out = g / (g.numel() / g.size(0))
-        print(out)
-        return out[:,None,None,None].expand(g.size(0), ctx.l, ctx.dim0, ctx.dim1)
+        g = g / (ctx.l * ctx.dim0 * ctx.dim1)
+        return g[:,None,None,None].expand(g.size(0), ctx.l, ctx.dim0, ctx.dim1)
 pass_thresh = PassThresh.apply
 
 class SMVecMatMul(Function):
