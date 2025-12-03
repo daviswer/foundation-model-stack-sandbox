@@ -699,6 +699,9 @@ class MultiHeadAttention(nn.Module):
     @torch.compile
     def _calc_aux(self, mask):
         aux = pass_thresh(mask)
+        print(aux)
+        print(mask[:,:,-1].gt(.001).view(mask.size(0),-1).sum(-1).to(dtype=mask.dtype).div(mask.size(1)*mask.size(3)))
+        print()
         return aux
         
 
