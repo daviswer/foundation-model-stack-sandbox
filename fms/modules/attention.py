@@ -697,7 +697,9 @@ class MultiHeadAttention(nn.Module):
 
     @torch.compile
     def _calc_aux(self, mask):
-        return pass_thresh(mask)
+        aux = pass_thresh(mask)
+        print(aux)
+        return aux
         
 
 
