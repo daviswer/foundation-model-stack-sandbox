@@ -142,7 +142,7 @@ class UniversalAttention(Function):
 class PassThresh(Function):
     @staticmethod
     def forward(mask):
-        return mask[:,:,-1].gt(.001).view(mask.size(0),-1).sum(-1).to(dtype=mask.dtype).div(mask.size(1)*mask.size(3))
+        return mask[:,:,:,-1].gt(.001).view(mask.size(0),-1).sum(-1).to(dtype=mask.dtype).div(mask.size(1)*mask.size(2))
     @staticmethod
     def setup_context(ctx, inputs, output):
         mask = inputs[0]
@@ -697,10 +697,8 @@ class MultiHeadAttention(nn.Module):
 
     @torch.compile
     def _calc_aux(self, mask):
-        q_len = mask.size(-1)
-        triu_count = q_len*(q_len-1)/2*mask.size(1)  # per seq
-        aux = pass_thresh(mask)
-        return aux
+        return pass_thresh(mask)
+        
 
 
 
