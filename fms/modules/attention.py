@@ -150,6 +150,7 @@ class PassThresh(Function):
         ctx.dim1 = mask.size(1)
     @staticmethod
     def backward(ctx, g):
+        print(g)
         return g[:,None].expand(ctx.dim0, ctx.dim1)
 pass_thresh = PassThresh.apply
 
