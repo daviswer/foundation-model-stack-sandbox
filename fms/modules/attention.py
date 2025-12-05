@@ -633,8 +633,8 @@ class MultiHeadAttention(nn.Module):
             torch.backends.cuda.enable_math_sdp(False)
             attn = F.scaled_dot_product_attention(
                 queries, 
-                torch.repeat_interleave(keys,r,dim=1), 
-                torch.repeat_interleave(values,r,dim=1), 
+                keys.repeat(1,r,1,1), 
+                values.repeat(1,r,1,1),
                 attn_mask=mask,  # torch.repeat_interleave(mask,r,dim=1),
                 scale=1,
             )  # b h l d
@@ -693,7 +693,7 @@ class MultiHeadAttention(nn.Module):
         affinity = affinity.tril(-1).cumsum(2).to(dtype=k.dtype)
         mask = affinity.exp()
         affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).triu(1), float('-inf'))
-        return torch.repeat_interleave(affinity,r,dim=1), mask
+        return affinity.repeat(1,r,1,1), mask
 
     @torch.compile
     def _calc_aux(self, mask):
