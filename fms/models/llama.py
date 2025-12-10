@@ -552,6 +552,7 @@ class LLaMAHeadless(nn.Module):
             if past_key_value_states is None or len(past_key_value_states) == 0:
                 past_key_value_states = [None for _ in range(len(self.layers))]
             head = cor
+            d_in = dec
             out = []
             # Reshape batch of chunked seqs into seq-batch of chunks
             b,n,d = g_t.size()
