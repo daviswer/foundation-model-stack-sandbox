@@ -496,7 +496,10 @@ class LLaMAHeadless(nn.Module):
             alt_history_mask[n:,n:] = block_diag  # cor self-attends in blocks only
             alt_history_mask[n:,:n] = block_tril  # cor cross attends to past g_t blocks
             alt_history_mask = alt_history_mask[None,None]  # 1 1 2n 2n
-            position_ids = torch.cat([torch.arange(n, device=g_t.device)]*2, dim=0).unsqueeze(0)  # 1 2n
+            position_ids = torch.cat([
+                torch.arange(n, device=g_t.device),
+                torch.arange(n, device=g_t.device) + 128
+            ], dim=0).unsqueeze(0)  # 1 2n
 
             # Embed the given vocabulary indices using the given attention mask, with pre-/post-norm and dropout as specified
             # x_in: batch_size x seq_len
