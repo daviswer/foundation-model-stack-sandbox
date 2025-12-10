@@ -485,7 +485,6 @@ class LLaMAHeadless(nn.Module):
         if not gen_data:
             # Construct input sequences and masks
             x_in = torch.cat([g_t,cor], dim=1)
-            d_in = torch.cat([dec,dec], dim=1)
             alt_history_mask = torch.zeros(2*n, 2*n, dtype=torch.bool, device=g_t.device)
             # N 1 Q K
             block_diag = torch.block_diag(
@@ -527,7 +526,7 @@ class LLaMAHeadless(nn.Module):
                     x_in = output
 
             # Decoder time!
-            d_in = self.embedding(d_in)  # b n d
+            d_in = self.embedding(dec)  # b n d
             # Grab only output from corrupted inputs
             enc_out = x_in[:,n:]  # b n d
             # Reshape batch of chunked seqs into seq-batch of chunks
