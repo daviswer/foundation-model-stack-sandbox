@@ -911,7 +911,6 @@ class GatedMultiHeadAttention(nn.Module):
         # q, k, v: batch_size x seq_len x emb_dim
         # mask: batch_size x seq_len x seq_len
         batch_size, q_len, _ = q.size()
-        k_len = k.size(1)
 
         # if this is self attention, we always recompute
         # cross attention only gets computed when a cache does not exist
@@ -922,6 +921,7 @@ class GatedMultiHeadAttention(nn.Module):
         # b x h x kvlen x ds
         # todo: Cross attention (This always is true for now)
         q_out, k_out, v_out, g_out = self.in_proj(q, k, v)
+        k_len = k_out.size(1)
         
         # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
         queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
