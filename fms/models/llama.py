@@ -334,7 +334,7 @@ class LLaMAHeadless(nn.Module):
         self.rot_emb = RotaryEmbedding(
             dim=self.config.emb_dim // self.config.nheads,
             scaling=self.config.rope_scaling,
-            max_seq_len=self.config.max_expected_seq_len,
+            max_seq_len=self.config.max_expected_seq_len+128,
             ratio=self.config.rope_theta,
         )
         # RoPE init
