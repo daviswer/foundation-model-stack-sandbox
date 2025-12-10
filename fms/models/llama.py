@@ -578,6 +578,7 @@ class LLaMAHeadless(nn.Module):
             dec_out = torch.cat(out, dim=1)  # bn 128
             # Reshape output back to batch of chunked seqs
             dec_out = dec_out.view(b,n)
+            present_key_value_states = None
 
         return dec_out, present_key_value_states
 
