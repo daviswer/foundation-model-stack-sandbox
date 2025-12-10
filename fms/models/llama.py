@@ -533,7 +533,7 @@ class LLaMAHeadless(nn.Module):
             # Grab only output from corrupted inputs
             enc_out = x_in[:,n:]  # b n d
             # Reshape batch of chunked seqs into seq-batch of chunks
-            b,_,d = g_t.size()
+            b,_,d = d_in.size()
             enc_out = enc_out.reshape(b*n//128, 128, d)  # bk c d
             d_in = d_in.reshape(b*n//128, 128, d)  # bk c d
             output = self.decoder[0](enc_out, d_in)
