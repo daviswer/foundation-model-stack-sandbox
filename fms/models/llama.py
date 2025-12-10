@@ -121,7 +121,6 @@ class DecoderBlock(nn.Module):
         position_ids=None,
         past_key_value_state=None,
         use_cache=False,
-        c_mask=None,
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
         # if the cache is not empty, we need to get the kv cache for self and cross attention
@@ -131,25 +130,7 @@ class DecoderBlock(nn.Module):
         # else:
         #     self_attn_past_key_value = None
 
-        # first we do MHA and Add&Norm
-        residual = x
-        x = self.ln(x)
-        x = self.attn(
-            q=x,
-            position_ids=position_ids,
-            past_key_value_state=self_attn_past_key_value,
-            use_cache=use_cache,
-            **attn_kwargs,
-        )
-        cache = None
-        if use_cache:
-            x, cache = x
-        if self.config.p_dropout != 0:
-            x = self.dropout(x)
-        # residual connection
-        x = x + residual
-
-        # then we do Cross-Attn and Add&Norm
+        # first we do Cross-Attn and Add&Norm
         residual = x
         x = self.c_ln(x)
         x = self.c_attn(
@@ -159,11 +140,29 @@ class DecoderBlock(nn.Module):
             position_ids=position_ids,
             past_key_value_state=self_attn_past_key_value,
             use_cache=use_cache,
-            mask=c_mask,
+            attn_name="sdpa_bidirectional",
         )
         if self.config.p_dropout != 0:
             x = self.dropout(x)
         # another residual
+        x = x + residual
+
+        # then we do MHA and Add&Norm
+        residual = x
+        x = self.ln(x)
+        x = self.attn(
+            q=x,
+            position_ids=position_ids,
+            past_key_value_state=self_attn_past_key_value,
+            use_cache=use_cache,
+            attn_name="sdpa_causal",
+        )
+        cache = None
+        if use_cache:
+            x, cache = x
+        if self.config.p_dropout != 0:
+            x = self.dropout(x)
+        # residual connection
         x = x + residual
 
         if use_cache:
@@ -476,68 +475,106 @@ class LLaMAHeadless(nn.Module):
         position_ids=None,
         past_key_value_states=None,
         use_cache=False,
+        gen_data=False,
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
+        # If not gen_data: g_t is original history, cor is encoder input, dec is decoder input
+        # Else: g_t is encoder output, cor is model head, dec is decoder input
+
         n = g_t.size(1)
-        # Construct input sequences and masks
-        x_in = torch.cat([g_t,cor], dim=1)
-        d_in = torch.cat([dec,dec], dim=1)
-        alt_history_mask = torch.zeros(2*n, 2*n, dtype=torch.bool, device=g_t.device)
-        # N 1 Q K
-        block_diag = torch.block_diag(
-            *[torch.ones(128,128, dtype=torch.bool, device=g_t.device)]*(n//128)
-        )
-        tril = torch.ones_like(block_diag).tril()
-        block_tril = tril.logical_or(block_diag)
-        tril.logical_and_(block_diag.logical_not())
-        alt_history_mask[:n,:n] = block_tril  # g_t self-attends causally in blocks
-        alt_history_mask[n:,n:] = block_diag  # cor self-attends in blocks only
-        alt_history_mask[n:,:n] = tril  # cor cross attends to past g_t blocks
-        alt_history_mask = alt_history_mask[None,None]  # 1 1 2n 2n
-        dec_history_mask = alt_history_mask.tril()
-        dec_cross_mask = torch.block_diag(block_diag,block_diag)[None,None]  # 1 1 2n 2n
-        position_ids = torch.cat([torch.arange(n, device=g_t.device)]*2, dim=0).unsqueeze(0)  # 1 2n
-
-        # Embed the given vocabulary indices using the given attention mask, with pre-/post-norm and dropout as specified
-        # x_in: batch_size x seq_len
-        # mask: batch_size x seq_len x seq_len
-        # bias: nheads x seq_len x seq_len
-        if past_key_value_states is None or len(past_key_value_states) == 0:
-            past_key_value_states = [None for _ in range(len(self.layers))]
-        x_in = self.embedding(x_in)
-
-        # this is the output cache for all the decoder layers
-        present_key_value_states = []
-
-        for i, layer in enumerate(self.layers):
-            output = layer(
-                x=x_in,
-                position_ids=position_ids,
-                past_key_value_state=past_key_value_states[i],
-                use_cache=use_cache,
-                mask = alt_history_mask,
-                # **attn_kwargs,
+        if not gen_data:
+            # Construct input sequences and masks
+            x_in = torch.cat([g_t,cor], dim=1)
+            d_in = torch.cat([dec,dec], dim=1)
+            alt_history_mask = torch.zeros(2*n, 2*n, dtype=torch.bool, device=g_t.device)
+            # N 1 Q K
+            block_diag = torch.block_diag(
+                *[torch.ones(128,128, dtype=torch.bool, device=g_t.device)]*(n//128)
             )
+            block_tril = torch.ones_like(block_diag).tril()
+            block_tril = block_tril.logical_or(block_diag)
+            alt_history_mask[:n,:n] = block_tril  # g_t self-attends causally in blocks
+            alt_history_mask[n:,n:] = block_diag  # cor self-attends in blocks only
+            alt_history_mask[n:,:n] = block_tril  # cor cross attends to past g_t blocks
+            alt_history_mask = alt_history_mask[None,None]  # 1 1 2n 2n
+            position_ids = torch.cat([torch.arange(n, device=g_t.device)]*2, dim=0).unsqueeze(0)  # 1 2n
 
-            if use_cache:
-                x_in, present_key_value_state = output
-                present_key_value_states.append(present_key_value_state)
-            else:
-                x_in = output
+            # Embed the given vocabulary indices using the given attention mask, with pre-/post-norm and dropout as specified
+            # x_in: batch_size x seq_len
+            # mask: batch_size x seq_len x seq_len
+            # bias: nheads x seq_len x seq_len
+            if past_key_value_states is None or len(past_key_value_states) == 0:
+                past_key_value_states = [None for _ in range(len(self.layers))]
+            x_in = self.embedding(x_in)
 
-        # Decoder time!
-        d_in = self.embedding(d_in)
-        enc_out = x_in
-        output = self.decoder[0](enc_out, d_in)
-        output = self.decoder[1](output, enc_out, position_ids, mask=dec_history_mask, c_mask=dec_cross_mask)
-        output = self.decoder[2](output, enc_out, position_ids, mask=dec_history_mask, c_mask=dec_cross_mask)
-        # We only care about recovering the corrupted portions
-        output = output[:,n:]
+            # this is the output cache for all the decoder layers
+            present_key_value_states = []
 
-        dec_out = output
-        dec_out = self.dec_norm(dec_out)
-        if self.config.p_dropout:
-            dec_out = self.dropout(dec_out)
+            for i, layer in enumerate(self.layers):
+                output = layer(
+                    x=x_in,
+                    position_ids=position_ids,
+                    past_key_value_state=past_key_value_states[i],
+                    use_cache=use_cache,
+                    mask = alt_history_mask,
+                    # **attn_kwargs,
+                )
+
+                if use_cache:
+                    x_in, present_key_value_state = output
+                    present_key_value_states.append(present_key_value_state)
+                else:
+                    x_in = output
+
+            # Decoder time!
+            d_in = self.embedding(d_in)  # b n d
+            # Grab only output from corrupted inputs
+            enc_out = x_in[:,n:]  # b n d
+            # Reshape batch of chunked seqs into seq-batch of chunks
+            b,_,d = g_t.size()
+            enc_out = enc_out.reshape(b*n//128, 128, d)  # bk c d
+            d_in = d_in.reshape(b*n//128, 128, d)  # bk c d
+            output = self.decoder[0](enc_out, d_in)
+            output = self.decoder[1](output, enc_out, position_ids)
+            output = self.decoder[2](output, enc_out, position_ids)
+            # Shape output back into batch of chunked seqs
+            output = output.view(b,n,d)
+
+            dec_out = output
+            dec_out = self.dec_norm(dec_out)
+            if self.config.p_dropout:
+                dec_out = self.dropout(dec_out)
+        
+        else:
+            # Construct new corruptions by running decoder iteratively
+            if past_key_value_states is None or len(past_key_value_states) == 0:
+                past_key_value_states = [None for _ in range(len(self.layers))]
+            head = cor
+            out = []
+            # Reshape batch of chunked seqs into seq-batch of chunks
+            b,n,d = g_t.size()
+            enc_out = g_t.view(b*n//128, 128, d)  # bn c d
+            prior = dec.view(b*n//128, 128)[:,:1]  # bn 1
+            pos = torch.empty(1, 1, device=d_in.device, dtype=torch.int)
+            (kv1, kv2) = past_key_value_states[-2], past_key_value_states[-1]
+            for i in range(128):
+                pos[0,0] = i
+                d_in = self.embedding(prior)
+                output = self.decoder[0](enc_out[:,i:i+1], d_in)
+                output, kv1 = self.decoder[1](output, enc_out, pos, use_cache=True, past_key_value_states=kv1)
+                output, kv2 = self.decoder[2](output, enc_out, pos, use_cache=True, past_key_value_states=kv2)
+
+                dec_out = output
+                dec_out = self.dec_norm(dec_out)
+                if self.config.p_dropout:
+                    dec_out = self.dropout(dec_out)
+                pred = head(dec_out)  # bn 1 v
+                pred = pred.argmax(dim=-1)  # bn 1
+                out.append(pred)
+                d_in = torch.ones_like(pred) * pred
+            dec_out = torch.cat(out, dim=1)  # bn 128
+            # Reshape output back to batch of chunked seqs
+            dec_out = dec_out.view(b,n)
 
         return dec_out, present_key_value_states
 
@@ -624,6 +661,7 @@ class LLaMA(nn.Module):
         past_key_value_states: Optional[Tuple[torch.FloatTensor,]] = None,
         use_cache: bool = False,
         last_n_tokens: int = 0,
+        gen_data: bool = False,
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
         get_attention_type(**attn_kwargs)["validate_attn_kwargs"](
@@ -632,12 +670,19 @@ class LLaMA(nn.Module):
             past_key_value_states=past_key_value_states,
             **attn_kwargs,
         )
-        output, cache = self.base_model(
-            g_t, cor, dec, position_ids, past_key_value_states, use_cache, **attn_kwargs
-        )
+        if not gen_data:
+            output, cache = self.base_model(
+                g_t, cor, dec, position_ids, past_key_value_states, use_cache, False, **attn_kwargs
+            )
 
-        output = gather_outputs(output, last_n_tokens, **attn_kwargs)
-        preds = self.head(output)
+            output = gather_outputs(output, last_n_tokens, **attn_kwargs)
+            preds = self.head(output)
+        else:
+            with torch.no_grad():
+                output, cache = self.base_model(
+                    g_t, self.head, dec, position_ids, past_key_value_states, use_cache, True, **attn_kwargs
+                )
+                preds = output
 
         if use_cache:
             return preds, cache
