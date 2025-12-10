@@ -689,7 +689,7 @@ class LLaMA(nn.Module):
         if use_cache:
             return preds, cache
         else:
-            return preds
+            return preds, output
 
 
 # Register common LLaMA variants with the model registration API
