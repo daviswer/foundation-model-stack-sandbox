@@ -121,8 +121,10 @@ class DecoderBlock(nn.Module):
         position_ids=None,
         past_key_value_state=None,
         use_cache=False,
+        cmask=None,
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
+        assert use_cache
         # if the cache is not empty, we need to get the kv cache for self and cross attention
         self_attn_past_key_value = past_key_value_state
         # if past_key_value_state is not None:
@@ -130,39 +132,63 @@ class DecoderBlock(nn.Module):
         # else:
         #     self_attn_past_key_value = None
 
-        # first we do Cross-Attn and Add&Norm
-        residual = x
-        x = self.c_ln(x)
-        x = self.c_attn(
-            q=x,
-            k=x0,
-            v=x0,
-            position_ids=position_ids,
-            past_key_value_state=self_attn_past_key_value,
-            use_cache=False,
-            attn_name="sdpa_bidirectional",
-        )
-        if self.config.p_dropout != 0:
-            x = self.dropout(x)
-        # another residual
-        x = x + residual
-
-        # then we do MHA and Add&Norm
+        # first we do MHA and Add&Norm
         residual = x
         x = self.ln(x)
-        x = self.attn(
-            q=x,
-            position_ids=position_ids,
-            past_key_value_state=self_attn_past_key_value,
-            use_cache=use_cache,
-            attn_name="sdpa_causal",
-        )
+        if cmask is None:
+            # Inference call with caching
+            x = self.attn(
+                q=x,
+                position_ids=position_ids,
+                past_key_value_state=self_attn_past_key_value,
+                use_cache=use_cache,
+                attn_name="sdpa_causal",
+            )
+        else:
+            # Parallel call with masking
+            x = self.attn(
+                q=x,
+                position_ids=position_ids,
+                past_key_value_state=self_attn_past_key_value,
+                use_cache=use_cache,
+                mask=cmask,
+            )
         cache = None
         if use_cache:
             x, cache = x
         if self.config.p_dropout != 0:
             x = self.dropout(x)
         # residual connection
+        x = x + residual
+
+        # then we do Cross-Attn and Add&Norm
+        residual = x
+        x = self.c_ln(x)
+        if cmask is None:
+            # Inference call with full access
+            x = self.c_attn(
+                q=x,
+                k=x0,
+                v=x0,
+                position_ids=position_ids,
+                past_key_value_state=self_attn_past_key_value,
+                use_cache=False,
+                attn_name="sdpa_bidirectional",
+            )
+        else:
+            # Parallel call with block-diag masking
+            x = self.c_attn(
+                q=x,
+                k=x0,
+                v=x0,
+                position_ids=position_ids,
+                past_key_value_state=self_attn_past_key_value,
+                use_cache=False,
+                **attn_kwargs,
+            )
+        if self.config.p_dropout != 0:
+            x = self.dropout(x)
+        # another residual
         x = x + residual
 
         if use_cache:
@@ -476,10 +502,11 @@ class LLaMAHeadless(nn.Module):
         past_key_value_states=None,
         use_cache=False,
         gen_data=False,
+        head=None,
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
-        # If not gen_data: g_t is original history, cor is encoder input, dec is decoder input
-        # Else: g_t is encoder output, cor is model head, dec is decoder input
+        # If not gen_data: g_t is original history, cor is encoder input, dec is decoder input (concat)
+        # Else: g_t is encoder output, cor is dec cache, dec is decoder input
 
         n = g_t.size(1)
         if not gen_data:
@@ -496,6 +523,8 @@ class LLaMAHeadless(nn.Module):
             alt_history_mask[n:,n:] = block_diag  # cor self-attends in blocks only
             alt_history_mask[n:,:n] = block_tril  # cor cross attends to past g_t blocks
             alt_history_mask = alt_history_mask[None,None]  # 1 1 2n 2n
+            dec_history_mask = alt_history_mask.tril()
+            dec_block_mask = torch.block_diag(block_diag,block_diag)[None,None]  # 1 1 2n 2n
             position_ids = torch.cat([
                 torch.arange(n, device=g_t.device),
                 torch.arange(n, device=g_t.device) + 128
@@ -517,32 +546,24 @@ class LLaMAHeadless(nn.Module):
                     x=x_in,
                     position_ids=position_ids,
                     past_key_value_state=past_key_value_states[i],
-                    use_cache=use_cache,
+                    use_cache=False,
                     mask = alt_history_mask,
                     # **attn_kwargs,
                 )
-
-                if use_cache:
-                    x_in, present_key_value_state = output
-                    present_key_value_states.append(present_key_value_state)
-                else:
-                    x_in = output
+                x_in = output
 
             # Decoder time!
-            d_in = self.embedding(dec)  # b n d
+            d_in = self.embedding(dec)  # b 2n d
             # Grab only output from corrupted inputs
-            enc_out = x_in[:,n:]  # b n d
-            # Reshape batch of chunked seqs into seq-batch of chunks
-            b,_,d = d_in.size()
-            enc_out = enc_out.reshape(b*n//128, 128, d)  # bk c d
-            d_in = d_in.reshape(b*n//128, 128, d)  # bk c d
+            enc_out = x_in
             output = self.decoder[0](enc_out, d_in)
-            output = self.decoder[1](output, enc_out, position_ids)
-            output = self.decoder[2](output, enc_out, position_ids)
-            # Shape output back into batch of chunked seqs
-            output = output.view(b,n,d)
+            output, kv1 = self.decoder[1](output, enc_out, position_ids, use_cache=True, mask=dec_history_mask, cmask=dec_block_mask)
+            present_key_value_states.append(kv1)
+            output, kv2 = self.decoder[2](output, enc_out, position_ids, use_cache=True, mask=dec_history_mask, cmask=dec_block_mask)
+            present_key_value_states.append(kv2)
 
-            dec_out = output
+            # Grab only the corrupted outputs
+            dec_out = output[:,n:]
             dec_out = self.dec_norm(dec_out)
             if self.config.p_dropout:
                 dec_out = self.dropout(dec_out)
@@ -684,14 +705,14 @@ class LLaMA(nn.Module):
         else:
             with torch.no_grad():
                 output, cache = self.base_model(
-                    g_t, self.head, dec, position_ids, past_key_value_states, use_cache, True, **attn_kwargs
+                    g_t, cor, dec, position_ids, past_key_value_states, use_cache, True, self.head, **attn_kwargs
                 )
                 preds = output
 
-        if use_cache:
-            return preds, cache
+        if gen_data:
+            return output
         else:
-            return preds, output
+            return preds, output, cache
 
 
 # Register common LLaMA variants with the model registration API
