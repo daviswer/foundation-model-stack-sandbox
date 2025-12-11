@@ -579,8 +579,9 @@ class LLaMAHeadless(nn.Module):
             enc_out = g_t.view(b*n//128, 128, d)  # bn c d
             prior = dec.view(b*n//128, 128)[:,:1]  # bn 1
             pos = [x*128+128 for x in range(n//128)]*b
-            pos = torch.tensor(pos, device=enc_out.device, dtype=torch.int)
             print("GOTHERE")
+            pos = torch.tensor(pos, device=enc_out.device, dtype=torch.int)
+            print("GOTHERETOO")
             (kv1, kv2) = past_key_value_states[-2], past_key_value_states[-1]
             # Rearrange caches into seq-batch of chunks
             kv1[0] = kv1[0][:,:,:n].view(b,kv1[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv1[0].size(1),128,-1)
@@ -592,7 +593,7 @@ class LLaMAHeadless(nn.Module):
                 pos = pos+1
                 d_in = self.embedding(prior)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
-                print("GOTHERETOO", i)
+                print("PREATTN", i)
                 output, kv1 = self.decoder[1](output, enc_out, pos, use_cache=True, past_key_value_states=kv1)
                 output, kv2 = self.decoder[2](output, enc_out, pos, use_cache=True, past_key_value_states=kv2)
 
