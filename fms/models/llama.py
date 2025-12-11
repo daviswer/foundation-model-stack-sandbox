@@ -579,9 +579,8 @@ class LLaMAHeadless(nn.Module):
             b,n,d = g_t.size()
             enc_out = g_t.view(b*n//128, 128, d)  # bn c d
             prior = dec.view(b*n//128, 128)[:,:1]  # bn 1
-            pos = [x*128+128 for x in range(n//128)]*b
-            print("GOTHERE", len(pos), pos)
-            pos = torch.tensor(pos, device=enc_out.device, dtype=torch.int).unsqueeze(1)
+            print("GOTHERE", len(pos), torch.arange(n//128)*128+128)
+            pos = torch.arange(n//128, device=enc_out.device).mul(128).add(128).repeat(b).unsqueeze(1)
             print("GOTHERETOO")
             time.sleep(10)
             (kv1, kv2) = past_key_value_states[-2], past_key_value_states[-1]
