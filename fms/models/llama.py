@@ -573,7 +573,6 @@ class LLaMAHeadless(nn.Module):
             if past_key_value_states is None or len(past_key_value_states) == 0:
                 past_key_value_states = [None for _ in range(len(self.layers))]
             head = cor
-            d_in = dec
             out = []
             # Reshape batch of chunked seqs into seq-batch of chunks
             b,n,d = g_t.size()
@@ -581,23 +580,17 @@ class LLaMAHeadless(nn.Module):
             prior = dec.view(b*n//128, 128)[:,:1]  # bn 1
             pos = torch.arange(n//128, device=enc_out.device).mul(128).add(128).repeat(b).unsqueeze(1)
             kv1, kv2 = past_key_value_states[-2], past_key_value_states[-1]
-            print("GOTHERE")
             # Rearrange caches into seq-batch of chunks
             kv1[0] = kv1[0][:,:,:n].view(b,kv1[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv1[0].size(1),128,-1)
-            print("GOTTHERE")
             kv1[1] = kv1[1][:,:,:n].view(b,kv1[1].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv1[1].size(1),128,-1)
-            print("GOTWHERE?")
             kv2[0] = kv2[0][:,:,:n].view(b,kv2[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv2[0].size(1),128,-1)
-            print("GOTEVERYWHERE!")
             kv2[1] = kv2[1][:,:,:n].view(b,kv2[1].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv2[1].size(1),128,-1)
             for i in range(128):
-                print("IN LOOP", i)
-                pos = pos+1
+                print("GOTHERE", prior.min().item(), prior.max().item())
                 d_in = self.embedding(prior)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
-                print("PREATTN", i)
-                output, kv1 = self.decoder[1](output, enc_out, pos, use_cache=True, past_key_value_states=kv1)
-                output, kv2 = self.decoder[2](output, enc_out, pos, use_cache=True, past_key_value_states=kv2)
+                output, kv1 = self.decoder[1](output, enc_out, pos+i, use_cache=True, past_key_value_states=kv1)
+                output, kv2 = self.decoder[2](output, enc_out, pos+i, use_cache=True, past_key_value_states=kv2)
 
                 dec_out = output
                 dec_out = self.dec_norm(dec_out)
@@ -606,7 +599,7 @@ class LLaMAHeadless(nn.Module):
                 pred = head(dec_out)  # bn 1 v
                 pred = pred.argmax(dim=-1)  # bn 1
                 out.append(pred)
-                d_in = torch.ones_like(pred) * pred
+                d_in = pred
             dec_out = torch.cat(out, dim=1)  # bn 128
             # Reshape output back to batch of chunked seqs
             dec_out = dec_out.view(b,n)
