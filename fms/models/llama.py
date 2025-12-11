@@ -502,11 +502,10 @@ class LLaMAHeadless(nn.Module):
         past_key_value_states=None,
         use_cache=False,
         gen_data=False,
-        head=None,
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
         # If not gen_data: g_t is original history, cor is encoder input, dec is decoder input (concat)
-        # Else: g_t is encoder output, cor is dec cache, dec is decoder input
+        # Else: g_t is encoder output, cor is model head, dec is decoder input
 
         n = g_t.size(1)
         if not gen_data:
@@ -579,10 +578,17 @@ class LLaMAHeadless(nn.Module):
             b,n,d = g_t.size()
             enc_out = g_t.view(b*n//128, 128, d)  # bn c d
             prior = dec.view(b*n//128, 128)[:,:1]  # bn 1
-            pos = torch.empty(1, 1, device=d_in.device, dtype=torch.int)
+            pos = position_ids[0,n:].view(n//128,128)[:,0]
+            pos = torch.cat([pos]*b, dim=0)[:,None]  # bn 1
             (kv1, kv2) = past_key_value_states[-2], past_key_value_states[-1]
+            # Rearrange caches into seq-batch of chunks
+            kv1[0] = kv1[0][:,:,:n].view(b,kv1[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv1[0].size(1),128,-1)
+            kv1[1] = kv1[1][:,:,:n].view(b,kv1[1].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv1[1].size(1),128,-1)
+            kv2[0] = kv2[0][:,:,:n].view(b,kv2[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv2[0].size(1),128,-1)
+            kv2[1] = kv2[1][:,:,:n].view(b,kv2[1].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv2[1].size(1),128,-1)
             for i in range(128):
-                pos[0,0] = i
+                print("GOTHERE", i)
+                pos = pos+1
                 d_in = self.embedding(prior)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
                 output, kv1 = self.decoder[1](output, enc_out, pos, use_cache=True, past_key_value_states=kv1)
@@ -705,7 +711,7 @@ class LLaMA(nn.Module):
         else:
             with torch.no_grad():
                 output, cache = self.base_model(
-                    g_t, cor, dec, position_ids, past_key_value_states, use_cache, True, self.head, **attn_kwargs
+                    g_t, self.head, dec, position_ids, past_key_value_states, use_cache, True, **attn_kwargs
                 )
                 preds = output
 
