@@ -587,7 +587,7 @@ class LLaMAHeadless(nn.Module):
             kv2[0] = kv2[0][:,:,:n].view(b,kv2[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv2[0].size(1),128,-1)
             kv2[1] = kv2[1][:,:,:n].view(b,kv2[1].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv2[1].size(1),128,-1)
             for i in range(128):
-                print("GOTHERE", i)
+                print("GOTHERE", i, pos.max().item(), pos.min().item())
                 pos = pos+1
                 d_in = self.embedding(prior)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
