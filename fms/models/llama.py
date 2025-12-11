@@ -578,7 +578,7 @@ class LLaMAHeadless(nn.Module):
             b,n,d = g_t.size()
             enc_out = g_t.view(b*n//128, 128, d)  # bn c d
             prior = dec.view(b*n//128, 128)[:,:1]  # bn 1
-            pos = position_ids[0,n:].view(n//128,128)[:,0]
+            pos = torch.arange(n//128, device=d_in.device)*128+128
             pos = torch.cat([pos]*b, dim=0)[:,None]  # bn 1
             (kv1, kv2) = past_key_value_states[-2], past_key_value_states[-1]
             # Rearrange caches into seq-batch of chunks
