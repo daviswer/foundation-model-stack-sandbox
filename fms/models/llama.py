@@ -580,13 +580,15 @@ class LLaMAHeadless(nn.Module):
             enc_out = g_t.view(b*n//128, 128, d)  # bn c d
             prior = dec.view(b*n//128, 128)[:,:1]  # bn 1
             pos = torch.arange(n//128, device=enc_out.device).mul(128).add(128).repeat(b).unsqueeze(1)
-            print("GOTHERE", len(pos))
-            time.sleep(10)
-            (kv1, kv2) = past_key_value_states[-2], past_key_value_states[-1]
+            kv1, kv2 = past_key_value_states[-2], past_key_value_states[-1]
+            print("GOTHERE")
             # Rearrange caches into seq-batch of chunks
             kv1[0] = kv1[0][:,:,:n].view(b,kv1[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv1[0].size(1),128,-1)
+            print("GOTTHERE")
             kv1[1] = kv1[1][:,:,:n].view(b,kv1[1].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv1[1].size(1),128,-1)
+            print("GOTWHERE?")
             kv2[0] = kv2[0][:,:,:n].view(b,kv2[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv2[0].size(1),128,-1)
+            print("GOTEVERYWHERE!")
             kv2[1] = kv2[1][:,:,:n].view(b,kv2[1].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv2[1].size(1),128,-1)
             for i in range(128):
                 print("IN LOOP", i)
