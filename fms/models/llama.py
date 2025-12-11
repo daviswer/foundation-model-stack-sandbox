@@ -1,6 +1,7 @@
 import logging
 import math
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Tuple
 from typing_extensions import Unpack
@@ -579,9 +580,10 @@ class LLaMAHeadless(nn.Module):
             enc_out = g_t.view(b*n//128, 128, d)  # bn c d
             prior = dec.view(b*n//128, 128)[:,:1]  # bn 1
             pos = [x*128+128 for x in range(n//128)]*b
-            print("GOTHERE")
-            pos = torch.tensor(pos, device=enc_out.device, dtype=torch.int)
+            print("GOTHERE", len(pos), pos)
+            pos = torch.tensor(pos, device=enc_out.device, dtype=torch.int).unsqueeze(1)
             print("GOTHERETOO")
+            time.sleep(10)
             (kv1, kv2) = past_key_value_states[-2], past_key_value_states[-1]
             # Rearrange caches into seq-batch of chunks
             kv1[0] = kv1[0][:,:,:n].view(b,kv1[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv1[0].size(1),128,-1)
