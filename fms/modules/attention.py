@@ -955,8 +955,10 @@ class GatedMultiHeadAttention(nn.Module):
         
         if use_cache:
             if batch_size==2*32:
+                print(keys_compute.shape)
                 print(queries[0,0,0,:6], keys_compute[0,-2:,0,:6])
             else:
+                print(keys_compute.shape)
                 print(queries[0,4096,0,:6], keys_compute[0,127,0,:6], keys_compute[0,4096,0,:6])
 
         if attn_compute_dict["is_prefill"](**attn_kwargs):
