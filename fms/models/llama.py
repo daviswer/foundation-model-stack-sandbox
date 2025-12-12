@@ -568,6 +568,7 @@ class LLaMAHeadless(nn.Module):
             dec_out = self.dec_norm(dec_out)
             if self.config.p_dropout:
                 dec_out = self.dropout(dec_out)
+            enc_embed = x_in
         
         else:
             head = cor
@@ -603,8 +604,9 @@ class LLaMAHeadless(nn.Module):
             # Reshape output back to batch of chunked seqs
             dec_out = dec_out.view(b,n)
             present_key_value_states = None
+            enc_embed = None
 
-        return dec_out, present_key_value_states
+        return dec_out, present_key_value_states, enc_embed
 
 
 class LLaMA(nn.Module):
@@ -699,23 +701,20 @@ class LLaMA(nn.Module):
             **attn_kwargs,
         )
         if not gen_data:
-            output, cache = self.base_model(
+            output, cache, embeds = self.base_model(
                 g_t, cor, dec, position_ids, past_key_value_states, use_cache, False, **attn_kwargs
             )
 
             output = gather_outputs(output, last_n_tokens, **attn_kwargs)
             preds = self.head(output)
+            return preds, embeds, cache 
         else:
             with torch.no_grad():
-                output, cache = self.base_model(
+                output, _, _ = self.base_model(
                     g_t, self.head, dec, position_ids, past_key_value_states, use_cache, True, **attn_kwargs
                 )
-                preds = output
+                return output
 
-        if gen_data:
-            return output
-        else:
-            return preds, output, cache
 
 
 # Register common LLaMA variants with the model registration API
