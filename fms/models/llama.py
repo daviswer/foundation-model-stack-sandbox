@@ -569,9 +569,7 @@ class LLaMAHeadless(nn.Module):
                 dec_out = self.dropout(dec_out)
         
         else:
-            # Construct new corruptions by running decoder iteratively
-            if past_key_value_states is None or len(past_key_value_states) == 0:
-                past_key_value_states = [None for _ in range(len(self.layers))]
+            print("GOTHERE 0")
             head = cor
             out = []
             # Reshape batch of chunked seqs into seq-batch of chunks
@@ -580,13 +578,15 @@ class LLaMAHeadless(nn.Module):
             prior = dec.view(b*n//128, 128)[:,:1]  # bn 1
             pos = torch.arange(n//128, device=enc_out.device).mul(128).add(128).repeat(b).unsqueeze(1)
             kv1, kv2 = past_key_value_states[-2], past_key_value_states[-1]
+            print("GOTHERE 1")
             # Rearrange caches into seq-batch of chunks
             kv1[0] = kv1[0][:,:,:n].view(b,kv1[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv1[0].size(1),128,-1)
             kv1[1] = kv1[1][:,:,:n].view(b,kv1[1].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv1[1].size(1),128,-1)
             kv2[0] = kv2[0][:,:,:n].view(b,kv2[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv2[0].size(1),128,-1)
             kv2[1] = kv2[1][:,:,:n].view(b,kv2[1].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv2[1].size(1),128,-1)
+            print("GOTHERE 2")
             for i in range(128):
-                print("GOTHERE", prior.min().item(), prior.max().item())
+                print("GOTHERE 3", prior.min().item(), prior.max().item())
                 time.sleep(10)
                 d_in = self.embedding(prior)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
