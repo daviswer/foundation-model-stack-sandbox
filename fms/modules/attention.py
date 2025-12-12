@@ -955,7 +955,7 @@ class GatedMultiHeadAttention(nn.Module):
         
         if use_cache:
             if batch_size==2*32:
-                print(keys_compute.shape, keys_compute[0,0,-2:,:6])
+                print(keys_compute[0,0,-2:,:6])
             else:
                 print(keys_compute[0,0,127,:6], keys_compute[0,0,4096,:6])
 

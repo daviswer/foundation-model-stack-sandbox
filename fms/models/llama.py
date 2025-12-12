@@ -590,11 +590,11 @@ class LLaMAHeadless(nn.Module):
             for i in range(128):
                 d_in = self.embedding(prior)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
-                output, kv1 = self.decoder[1](output, enc_out, pos+i, kpos, use_cache=True, past_key_value_states=kv1)
+                output, kv1 = self.decoder[1](output, enc_out, pos+i, kpos, use_cache=True, past_key_value_state=kv1)
                 if i==0:
                     assert False
                     print("Serial dec:", output[0,0,:4])
-                output, kv2 = self.decoder[2](output, enc_out, pos+i, kpos, use_cache=True, past_key_value_states=kv2)
+                output, kv2 = self.decoder[2](output, enc_out, pos+i, kpos, use_cache=True, past_key_value_state=kv2)
 
                 dec_out = output
                 dec_out = self.dec_norm(dec_out)
