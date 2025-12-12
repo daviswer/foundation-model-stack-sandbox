@@ -294,6 +294,7 @@ class RotaryEmbedding(PositionEncoder):
         q: torch.Tensor,
         k: torch.Tensor,
         position_ids: Optional[torch.Tensor] = None,
+        k_pos_ids: Optional[torch.Tensor] = None,
         past_kv_state: Optional[Tuple[torch.Tensor | None, torch.Tensor | None]] = None,
         use_cache=False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -340,8 +341,15 @@ class RotaryEmbedding(PositionEncoder):
         max_start_pos = torch.max(position_ids[:, 0])
         alpha = self.compute_freqs_cis(q.device, max_start_pos + seq_len)
         freqs = self.cached_freqs[q.device.index][alpha][position_ids]
+        if k_pos_ids is None:
+            kfreqs = freqs
+        else:
+            max_start_pos_k = torch.max(k_pos_ids[:, 0])
+            alpha_k = self.compute_freqs_cis(k.device, max_start_pos_k + seq_len)
+            kfreqs = self.cached_freqs[k.device.index][alpha_k][k_pos_ids]
 
         freqs = freqs.float()  # 1 L D/2 2 2
+        kfreqs = kfreqs.float()
         q_out = (
             freqs[:, -q.size(1) :, None, :, :, :]
             .mul(q_.unsqueeze(-2))
@@ -349,7 +357,7 @@ class RotaryEmbedding(PositionEncoder):
             .flatten(3)
         ).type_as(q)
         k_out = (
-            freqs[:, -k.size(1) :, None, :, :, :]
+            kfreqs[:, -k.size(1) :, None, :, :, :]
             .mul(k_.unsqueeze(-2))
             .sum(5)
             .flatten(3)
