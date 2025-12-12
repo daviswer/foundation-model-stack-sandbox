@@ -569,7 +569,6 @@ class LLaMAHeadless(nn.Module):
                 dec_out = self.dropout(dec_out)
         
         else:
-            print("GOTHERE 0")
             head = cor
             out = []
             # Reshape batch of chunked seqs into seq-batch of chunks
@@ -578,17 +577,12 @@ class LLaMAHeadless(nn.Module):
             prior = dec.view(b*n//128, 128)[:,:1]  # bn 1
             pos = torch.arange(n//128, device=enc_out.device).mul(128).add(128).repeat(b).unsqueeze(1)
             kv1, kv2 = past_key_value_states[-2], past_key_value_states[-1]
-            print("GOTHERE 1")
             # Rearrange caches into seq-batch of chunks
             kv1[0] = kv1[0][:,:,:n].view(b,kv1[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv1[0].size(1),128,-1)
             kv1[1] = kv1[1][:,:,:n].view(b,kv1[1].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv1[1].size(1),128,-1)
             kv2[0] = kv2[0][:,:,:n].view(b,kv2[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv2[0].size(1),128,-1)
             kv2[1] = kv2[1][:,:,:n].view(b,kv2[1].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv2[1].size(1),128,-1)
-            print("GOTHERE 2")
             for i in range(128):
-                print("GOTHERE 3")
-                print(prior.min().item(), prior.max().item())
-                time.sleep(10)
                 d_in = self.embedding(prior)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
                 output, kv1 = self.decoder[1](output, enc_out, pos+i, use_cache=True, past_key_value_states=kv1)
@@ -709,8 +703,6 @@ class LLaMA(nn.Module):
             output = gather_outputs(output, last_n_tokens, **attn_kwargs)
             preds = self.head(output)
         else:
-            print("TEST")
-            print(dec)
             with torch.no_grad():
                 output, cache = self.base_model(
                     g_t, self.head, dec, position_ids, past_key_value_states, use_cache, True, **attn_kwargs
