@@ -556,9 +556,9 @@ class LLaMAHeadless(nn.Module):
             d_in = self.embedding(dec)  # b 2n d
             # Grab only output from corrupted inputs
             enc_out = x_in
-            print("Parallel dec:", enc_out[0,n,:4], d_in[0,n,:4])
             output = self.decoder[0](enc_out, d_in)
             output, kv1 = self.decoder[1](output, enc_out, position_ids, use_cache=True, mask=dec_history_mask, cmask=dec_block_mask)
+            print("Parallel dec:", output[0,n,:4])
             present_key_value_states.append(list(kv1))  # Make list so we can massage it for inference
             output, kv2 = self.decoder[2](output, enc_out, position_ids, use_cache=True, mask=dec_history_mask, cmask=dec_block_mask)
             present_key_value_states.append(list(kv2))
@@ -586,10 +586,10 @@ class LLaMAHeadless(nn.Module):
             kv2[1] = kv2[1][:,:,:n].view(b,kv2[1].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv2[1].size(1),128,-1)
             for i in range(128):
                 d_in = self.embedding(prior)
-                if i==0:
-                    print("Serial dec:", enc_out[0,0,:4], d_in[0,0,:4])
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
                 output, kv1 = self.decoder[1](output, enc_out, pos+i, use_cache=True, past_key_value_states=kv1)
+                if i==0:
+                    print("Serial dec:", output[0,0,:4])
                 output, kv2 = self.decoder[2](output, enc_out, pos+i, use_cache=True, past_key_value_states=kv2)
 
                 dec_out = output
