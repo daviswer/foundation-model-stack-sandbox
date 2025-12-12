@@ -936,9 +936,9 @@ class GatedMultiHeadAttention(nn.Module):
             )
         if k is not None:
             if batch_size==2*32:
-                print(queries[0,0,0,:4], keys[0,0,0,:4])
+                print(queries[0,0,0,:6], keys[0,0,0,:6])
             else:
-                print(queries[0,4096,0,:4], keys[0,4096,0,:4])
+                print(queries[0,4096,0,:6], keys[0,4096,0,:6])
 
         attn_compute_dict = get_attention_type(**attn_kwargs)
 
