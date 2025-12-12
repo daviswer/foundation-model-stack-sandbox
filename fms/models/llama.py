@@ -161,6 +161,7 @@ class DecoderBlock(nn.Module):
             x = self.dropout(x)
         # residual connection
         # x = x + residual
+        x = residual
 
         # then we do Cross-Attn and Add&Norm
         residual = x
