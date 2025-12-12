@@ -935,7 +935,7 @@ class GatedMultiHeadAttention(nn.Module):
                 queries, keys, position_ids, k_pos_ids, past_key_value_state, use_cache
             )
         if k is not None:
-            if batch_size==2:
+            if batch_size==2*32:
                 print(queries[0,0,0,:4], keys[0,0,0,:4])
             else:
                 print(queries[0,4096,0,:4], keys[0,4096,0,:4])
