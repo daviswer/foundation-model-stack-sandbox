@@ -934,11 +934,6 @@ class GatedMultiHeadAttention(nn.Module):
             queries, keys = self.position_encoder.adjusted_qk(
                 queries, keys, position_ids, k_pos_ids, past_key_value_state, use_cache
             )
-        if k is not None:
-            if batch_size==2*32:
-                print(queries[0,0,0,:6], keys[0,0,0,:6])
-            else:
-                print(queries[0,4096,0,:6], keys[0,4096,0,:6])
 
         attn_compute_dict = get_attention_type(**attn_kwargs)
 
