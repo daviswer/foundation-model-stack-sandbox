@@ -709,6 +709,8 @@ class LLaMA(nn.Module):
             output = gather_outputs(output, last_n_tokens, **attn_kwargs)
             preds = self.head(output)
         else:
+            print("TEST")
+            print(dec)
             with torch.no_grad():
                 output, cache = self.base_model(
                     g_t, self.head, dec, position_ids, past_key_value_states, use_cache, True, **attn_kwargs
