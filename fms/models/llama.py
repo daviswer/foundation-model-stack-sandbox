@@ -120,6 +120,7 @@ class DecoderBlock(nn.Module):
         x,
         x0,
         position_ids=None,
+        k_pos_ids=None,
         past_key_value_state=None,
         use_cache=False,
         cmask=None,
@@ -173,6 +174,7 @@ class DecoderBlock(nn.Module):
                 k=x0,
                 v=x0,
                 position_ids=position_ids,
+                k_pos_ids=k_pos_ids,
                 past_key_value_state=self_attn_past_key_value,
                 use_cache=False,
                 attn_name="sdpa_bidirectional",
@@ -579,6 +581,7 @@ class LLaMAHeadless(nn.Module):
             enc_out = g_t.view(b*n//128, 128, d)  # bn c d
             prior = dec.view(b*n//128, 128)[:,:1]  # bn 1
             pos = torch.arange(n//128, device=enc_out.device).mul(128).add(128).repeat(b).unsqueeze(1)
+            kpos = torch.arange(n, device=enc_out.device).add(128).repeat(b).view(n//128,128)
             kv1, kv2 = past_key_value_states[-2], past_key_value_states[-1]
             # Rearrange caches into seq-batch of chunks
             kv1[0] = kv1[0][:,:,:n].view(b,kv1[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv1[0].size(1),128,-1)
@@ -588,10 +591,10 @@ class LLaMAHeadless(nn.Module):
             for i in range(128):
                 d_in = self.embedding(prior)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
-                output, kv1 = self.decoder[1](output, enc_out, pos+i, use_cache=True, past_key_value_states=kv1)
+                output, kv1 = self.decoder[1](output, enc_out, pos+i, kpos, use_cache=True, past_key_value_states=kv1)
                 if i==0:
                     print("Serial dec:", output[0,0,:4])
-                output, kv2 = self.decoder[2](output, enc_out, pos+i, use_cache=True, past_key_value_states=kv2)
+                output, kv2 = self.decoder[2](output, enc_out, pos+i, kpos, use_cache=True, past_key_value_states=kv2)
 
                 dec_out = output
                 dec_out = self.dec_norm(dec_out)

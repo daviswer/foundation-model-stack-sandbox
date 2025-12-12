@@ -889,6 +889,7 @@ class GatedMultiHeadAttention(nn.Module):
         k: Optional[torch.Tensor] = None,
         v: Optional[torch.Tensor] = None,
         position_ids=None,
+        k_pos_ids=None,
         past_key_value_state: Optional[Tuple[Tensor | None, Tensor | None]] = None,
         use_cache=False,
         **attn_kwargs: Unpack[AttentionKwargs],
@@ -931,7 +932,7 @@ class GatedMultiHeadAttention(nn.Module):
         # You want to apply rotary embeddings pre-cache
         if self.position_encoder is not None:
             queries, keys = self.position_encoder.adjusted_qk(
-                queries, keys, position_ids, past_key_value_state, use_cache
+                queries, keys, position_ids, k_pos_ids, past_key_value_state, use_cache
             )
 
         attn_compute_dict = get_attention_type(**attn_kwargs)
