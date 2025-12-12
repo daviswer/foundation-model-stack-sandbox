@@ -153,7 +153,7 @@ class DecoderBlock(nn.Module):
                 position_ids=position_ids,
                 past_key_value_state=self_attn_past_key_value,
                 use_cache=use_cache,
-                mask=cmask,
+                **attn_kwargs,
             )
         cache = None
         if use_cache:
@@ -188,7 +188,7 @@ class DecoderBlock(nn.Module):
                 position_ids=position_ids,
                 past_key_value_state=self_attn_past_key_value,
                 use_cache=False,
-                **attn_kwargs,
+                mask=cmask,
             )
         if self.config.p_dropout != 0:
             x = self.dropout(x)
