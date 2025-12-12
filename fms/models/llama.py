@@ -568,7 +568,7 @@ class LLaMAHeadless(nn.Module):
             dec_out = self.dec_norm(dec_out)
             if self.config.p_dropout:
                 dec_out = self.dropout(dec_out)
-            enc_embed = x_in
+            enc_embed = x_in[:,n:]
         
         else:
             head = cor
