@@ -556,7 +556,7 @@ class LLaMAHeadless(nn.Module):
             d_in = self.embedding(dec)  # b 2n d
             # Grab only output from corrupted inputs
             enc_out = x_in
-            print("Parallel dec:", enc_out[0,0,:4], d_in[0,0,:4])
+            print("Parallel dec:", enc_out[0,n,:4], d_in[0,n,:4])
             output = self.decoder[0](enc_out, d_in)
             output, kv1 = self.decoder[1](output, enc_out, position_ids, use_cache=True, mask=dec_history_mask, cmask=dec_block_mask)
             present_key_value_states.append(list(kv1))  # Make list so we can massage it for inference
