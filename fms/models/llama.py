@@ -65,8 +65,8 @@ class LLaMABlock(nn.Module):
     def __init__(self, config: LLaMAConfig, rotary_emb: RotaryEmbedding):
         super(LLaMABlock, self).__init__()
         self.config = config
-        emb_kq = 128  # self.config.emb_dim // self.config.nheads
-        emb_v = 128  # self.config.emb_dim // self.config.nheads
+        emb_kq = self.config.emb_dim // self.config.nheads
+        emb_v = self.config.emb_dim // self.config.nheads
 
         self.ln = LayerNormParameterized(
             self.config.emb_dim,
