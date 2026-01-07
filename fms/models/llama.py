@@ -606,7 +606,7 @@ class LLaMAHeadless(nn.Module):
                 pred = head(dec_out)  # bn 1 v
                 pred = pred.argmax(dim=-1)  # bn 1
                 out.append(pred)
-                d_in = pred
+                prior = pred
             dec_out = torch.cat(out, dim=1)  # bn 128
             # Reshape output back to batch of chunked seqs
             dec_out = dec_out.view(b,n)
