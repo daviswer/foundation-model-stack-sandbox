@@ -562,8 +562,6 @@ class LLaMAHeadless(nn.Module):
             # Grab only output from corrupted inputs
             enc_out = x_in
             output = self.decoder[0](enc_out, d_in)
-            if rank==0:
-                print(".   ", output[0,4096:4096+2,:4], dec[0,4096:4096+2])
             output, kv1 = self.decoder[1](output, enc_out, position_ids, use_cache=True, mask=dec_history_mask, cmask=dec_block_mask)
             present_key_value_states.append(list(kv1))  # Make list so we can massage it for inference
             output, kv2 = self.decoder[2](output, enc_out, position_ids, use_cache=True, mask=dec_history_mask, cmask=dec_block_mask)
@@ -594,8 +592,6 @@ class LLaMAHeadless(nn.Module):
             for i in range(128):
                 d_in = self.embedding(prior)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
-                if i<2 and rank==0:
-                    print(".   ", i, output[0,0,:4], prior[0,0])
                 output, kv1 = self.decoder[1](output, enc_out, pos+i, kpos, use_cache=True, past_key_value_state=kv1)
                 output, kv2 = self.decoder[2](output, enc_out, pos+i, kpos, use_cache=True, past_key_value_state=kv2)
 
