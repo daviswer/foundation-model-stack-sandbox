@@ -63,6 +63,7 @@ class LLaMAConfig(ModelConfig):
     rope_scaling: dict = field(default_factory=lambda: {})
     linear_config: Optional[Mapping[str, Any]] = None
     fused_weights: bool = True
+    chunk_size: int = 128
 
 
 class DecoderBlock(nn.Module):
@@ -363,7 +364,7 @@ class LLaMAHeadless(nn.Module):
         self.rot_emb = RotaryEmbedding(
             dim=self.config.emb_dim // self.config.nheads,
             scaling=self.config.rope_scaling,
-            max_seq_len=self.config.max_expected_seq_len+128,
+            max_seq_len=self.config.max_expected_seq_len+self.config.chunk_size,
             ratio=self.config.rope_theta,
         )
         # RoPE init
@@ -510,6 +511,7 @@ class LLaMAHeadless(nn.Module):
         # If not gen_data: g_t is original history, cor is encoder input, dec is decoder input (concat)
         # Else: g_t is encoder output, cor is model head, dec is decoder input
 
+        chunksize = self.config.chunk_size
         n = g_t.size(1)
         if not gen_data:
             # Construct input sequences and masks
@@ -517,7 +519,7 @@ class LLaMAHeadless(nn.Module):
             alt_history_mask = torch.zeros(2*n, 2*n, dtype=torch.bool, device=g_t.device)
             # N 1 Q K
             block_diag = torch.block_diag(
-                *[torch.ones(128,128, dtype=torch.bool, device=g_t.device)]*(n//128)
+                *[torch.ones(chunksize,chunksize, dtype=torch.bool, device=g_t.device)]*(n//chunksize)
             )
             block_tril = torch.ones_like(block_diag).tril()
             block_tril = block_tril.logical_or(block_diag)
@@ -529,7 +531,7 @@ class LLaMAHeadless(nn.Module):
             dec_block_mask = torch.block_diag(block_diag,block_diag)[None,None]  # 1 1 2n 2n
             position_ids = torch.cat([
                 torch.arange(n, device=g_t.device),
-                torch.arange(n, device=g_t.device) + 128
+                torch.arange(n, device=g_t.device) + chunksize
             ], dim=0).unsqueeze(0)  # 1 2n
 
             # Embed the given vocabulary indices using the given attention mask, with pre-/post-norm and dropout as specified
@@ -576,17 +578,17 @@ class LLaMAHeadless(nn.Module):
             out = []
             # Reshape batch of chunked seqs into seq-batch of chunks
             b,n,d = g_t.size()
-            enc_out = g_t.view(b*n//128, 128, d)  # bn c d
-            prior = dec.view(b*n//128, 128)[:,:1]  # bn 1
-            kpos = torch.arange(n, device=enc_out.device).add(128).repeat(b).view(b*n//128,128)
+            enc_out = g_t.view(b*n//chunksize, chunksize, d)  # bn c d
+            prior = dec.view(b*n//chunksize, chunksize)[:,:1]  # bn 1
+            kpos = torch.arange(n, device=enc_out.device).add(chunksize).repeat(b).view(b*n//chunksize,chunksize)
             pos = kpos[:,:1]
             kv1, kv2 = past_key_value_states[-2], past_key_value_states[-1]
             # Rearrange caches into seq-batch of chunks
-            kv1[0] = kv1[0][:,:,:n].view(b,kv1[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv1[0].size(1),128,-1)
-            kv1[1] = kv1[1][:,:,:n].view(b,kv1[1].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv1[1].size(1),128,-1)
-            kv2[0] = kv2[0][:,:,:n].view(b,kv2[0].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv2[0].size(1),128,-1)
-            kv2[1] = kv2[1][:,:,:n].view(b,kv2[1].size(1),n//128,128,-1).transpose(1,2).reshape(b*n//128,kv2[1].size(1),128,-1)
-            for i in range(128):
+            kv1[0] = kv1[0][:,:,:n].view(b,kv1[0].size(1),n//chunksize,chunksize,-1).transpose(1,2).reshape(b*n//chunksize,kv1[0].size(1),chunksize,-1)
+            kv1[1] = kv1[1][:,:,:n].view(b,kv1[1].size(1),n//chunksize,chunksize,-1).transpose(1,2).reshape(b*n//chunksize,kv1[1].size(1),chunksize,-1)
+            kv2[0] = kv2[0][:,:,:n].view(b,kv2[0].size(1),n//chunksize,chunksize,-1).transpose(1,2).reshape(b*n//chunksize,kv2[0].size(1),chunksize,-1)
+            kv2[1] = kv2[1][:,:,:n].view(b,kv2[1].size(1),n//chunksize,chunksize,-1).transpose(1,2).reshape(b*n//chunksize,kv2[1].size(1),chunksize,-1)
+            for i in range(chunksize):
                 d_in = self.embedding(prior)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
                 output, kv1 = self.decoder[1](output, enc_out, pos+i, kpos, use_cache=True, past_key_value_state=kv1)
@@ -601,7 +603,7 @@ class LLaMAHeadless(nn.Module):
                 pred = torch.multinomial(pred.exp(), 1)[:,0]  # bn 1
                 out.append(pred)
                 prior = pred
-            dec_out = torch.cat(out, dim=1)  # bn 128
+            dec_out = torch.cat(out, dim=1)  # bn chunksize
             # Reshape output back to batch of chunked seqs
             dec_out = dec_out.view(b,n)
             present_key_value_states = None
