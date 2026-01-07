@@ -563,7 +563,7 @@ class LLaMAHeadless(nn.Module):
             enc_out = x_in
             output = self.decoder[0](enc_out, d_in)
             if rank==0:
-                print(".   ", output[0,:2,:4], d_in[0,:2,:4], enc_out[0,:2,:4])
+                print(".   ", output[0,4096:4096+2,:4], d_in[0,4096:4096+2,:4], enc_out[0,4096:4096+2,:4])
             output, kv1 = self.decoder[1](output, enc_out, position_ids, use_cache=True, mask=dec_history_mask, cmask=dec_block_mask)
             present_key_value_states.append(list(kv1))  # Make list so we can massage it for inference
             output, kv2 = self.decoder[2](output, enc_out, position_ids, use_cache=True, mask=dec_history_mask, cmask=dec_block_mask)
