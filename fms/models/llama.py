@@ -581,7 +581,7 @@ class LLaMAHeadless(nn.Module):
             enc_out = g_t.view(b*n//chunksize, chunksize, d)  # bn c d
             dec = dec.view(b*n//chunksize, chunksize)  # bn c
             prior = dec[:,:1]  # bn 1
-            gt_override = torch.rand(b*n//chunksize).pow(2).mul(chunksize).int()
+            gt_override = torch.rand(b*n//chunksize, device=dec.device).pow(2).mul(chunksize).int()
             kpos = torch.arange(n, device=enc_out.device).add(chunksize).repeat(b).view(b*n//chunksize,chunksize)
             pos = kpos[:,:1]
             kv1, kv2 = past_key_value_states[-2], past_key_value_states[-1]
