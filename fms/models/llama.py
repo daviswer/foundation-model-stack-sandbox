@@ -579,7 +579,9 @@ class LLaMAHeadless(nn.Module):
             # Reshape batch of chunked seqs into seq-batch of chunks
             b,n,d = g_t.size()
             enc_out = g_t.view(b*n//chunksize, chunksize, d)  # bn c d
-            prior = dec.view(b*n//chunksize, chunksize)[:,:1]  # bn 1
+            dec = dec.view(b*n//chunksize, chunksize)  # bn c
+            prior = dec[:,:1]  # bn 1
+            gt_override = torch.rand(b*n//chunksize).pow(2).mul(chunksize).int()
             kpos = torch.arange(n, device=enc_out.device).add(chunksize).repeat(b).view(b*n//chunksize,chunksize)
             pos = kpos[:,:1]
             kv1, kv2 = past_key_value_states[-2], past_key_value_states[-1]
@@ -602,7 +604,8 @@ class LLaMAHeadless(nn.Module):
                 pred = pred.argmax(dim=-1)  # bn 1
                 # pred = torch.multinomial(pred.squeeze(1).exp(), 1)  # bn 1
                 out.append(pred)
-                prior = pred
+                gt_override_mask = gt_override.gt(i).int()[:,None]
+                prior = dec[:,i:i+1]*gt_override_mask + (1-gt_override_mask)*pred
             dec_out = torch.cat(out, dim=1)  # bn chunksize
             # Reshape output back to batch of chunked seqs
             dec_out = dec_out.view(b,n)
