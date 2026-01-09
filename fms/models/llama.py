@@ -604,8 +604,9 @@ class LLaMAHeadless(nn.Module):
                 pred = pred.argmax(dim=-1)  # bn 1
                 # pred = torch.multinomial(pred.squeeze(1).exp(), 1)  # bn 1
                 out.append(pred)
-                gt_override_mask = gt_override.gt(i).int()[:,None]
-                prior = dec[:,i:i+1]*gt_override_mask + (1-gt_override_mask)*pred
+                if i<chunksize-1:
+                    gt_override_mask = gt_override.gt(i).int()[:,None]
+                    prior = dec[:,i+1:i+2]*gt_override_mask + (1-gt_override_mask)*pred
             dec_out = torch.cat(out, dim=1)  # bn chunksize
             # Reshape output back to batch of chunked seqs
             dec_out = dec_out.view(b,n)
