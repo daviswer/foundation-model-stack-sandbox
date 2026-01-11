@@ -35,6 +35,7 @@ from fms.modules.tp import TPModule
 from torch.autograd import Function
 
 from ._universal_attention import attention as UAOpt
+from ._affinity_generation import _gen_affinity_scores
 
 def get_attention_type():
     pass
@@ -488,6 +489,7 @@ class MultiHeadAttention(nn.Module):
         self.register_buffer("staticb", torch.empty(self.kvheads*2))
 
         self.UA = UAOpt
+        self._gen_affinity_scores = _gen_affinity_scores
         # self.SMVMM = SMVecMatMul.apply
 
     def reset_parameters(self):
@@ -605,8 +607,25 @@ class MultiHeadAttention(nn.Module):
             values = values.transpose(1,2).contiguous()  # b h l d
             rates = static_src
 
-            attn, affs = self.UA(queries, keys, values, True, 1.3, static_src, static_dest)
+            ## Option 1: Optimized Affinity-Kernel generation + Torch SDPA ##
+            r = self.nheads // self.kvheads
+            keys = keys.repeat(1, r, 1, 1)
+            values = values.repeat(1, r, 1, 1)
+            static_src = static_src.repeat(1, r, 1, 1)
+            static_dest = static_dest.repeat(1, r, 1, 1)
+            affs = self._gen_affinity_scores(keys, static_src, static_dest)
+            attn = F.scaled_dot_product_attention(
+                queries, 
+                keys,
+                values,
+                attn_mask=affs,
+                scale=1,
+            )  # b h l d
 
+            ## Option 2: Optimized multi-kernel implementation. ##
+            #attn, affs = self.UA(queries, keys, values, True, 1.3, static_src, static_dest)
+
+            ## Baseline. ##
             #r = self.nheads // self.kvheads
             #affs = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
             #torch.backends.cuda.enable_math_sdp(False)
