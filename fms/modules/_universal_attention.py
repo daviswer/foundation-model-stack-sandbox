@@ -499,10 +499,12 @@ class _attention(torch.autograd.Function):
             BATCH, N_HEAD, N_CTX,  #
             BLOCK_M=PRE_BLOCK, HEAD_DIM=do.shape[-1]  #
         )
+
         ## Recompute affinity scores. ##
-        affinity = _affinity_fwd(k, static_src, static_dest)
-        #with torch.enable_grad():
-        #    affinity = _gen_affinity_scores(k, static_src, static_dest)
+        #affinity = _affinity_fwd(k, static_src, static_dest)
+        with torch.enable_grad():
+            affinity = _gen_affinity_scores(k, static_src, static_dest)
+
         daffinity = torch.zeros(affinity.shape[0], Q_H * KV_H, N_CTX, N_CTX, dtype=affinity.dtype, device=affinity.device)
 
         grid = (triton.cdiv(N_CTX, BLOCK_N1), 1, BATCH * N_HEAD)
@@ -523,8 +525,8 @@ class _attention(torch.autograd.Function):
 
         daffinity = torch.reshape(daffinity, (daffinity.shape[0], Q_H, KV_H, daffinity.shape[2], daffinity.shape[3])).sum(1, keepdim=False)
 
-        dk_new, dsrc, ddest = _affinity_bwd(k, static_src, static_dest, daffinity)
-        #dk_new, dsrc, ddest = torch.autograd.grad(affinity, [k, static_src, static_dest], grad_outputs=daffinity)
+        #dk_new, dsrc, ddest = _affinity_bwd(k, static_src, static_dest, daffinity)
+        dk_new, dsrc, ddest = torch.autograd.grad(affinity, [k, static_src, static_dest], grad_outputs=daffinity)
         dk += dk_new
         return dq[:, :, :, :ctx.HEAD_DIM], dk[:,:,:,:ctx.HEAD_DIM], dv[:,:,:,:ctx.HEAD_DIM], None, None, dsrc, ddest, None
 
