@@ -63,6 +63,7 @@ class LLaMAConfig(ModelConfig):
     rope_scaling: dict = field(default_factory=lambda: {})
     linear_config: Optional[Mapping[str, Any]] = None
     fused_weights: bool = True
+    chunk_size: int = 128
 
 
 class DecoderBlock(nn.Module):
@@ -120,6 +121,7 @@ class DecoderBlock(nn.Module):
         x,
         x0,
         position_ids=None,
+        k_pos_ids=None,
         past_key_value_state=None,
         use_cache=False,
     ):
@@ -156,7 +158,8 @@ class DecoderBlock(nn.Module):
             k=x0,
             v=x0,
             position_ids=position_ids,
-            past_key_value_state=None,
+            k_pos_ids=k_pos_ids,
+            past_key_value_state=self_attn_past_key_value,
             use_cache=False,  # Never use cache, intra-block only
             attn_name="sdpa_bidirectional",
         )
@@ -335,7 +338,7 @@ class LLaMAHeadless(nn.Module):
         self.rot_emb = RotaryEmbedding(
             dim=self.config.emb_dim // self.config.nheads,
             scaling=self.config.rope_scaling,
-            max_seq_len=self.config.max_expected_seq_len,
+            max_seq_len=self.config.max_expected_seq_len+self.config.chunk_size,
             ratio=self.config.rope_theta,
         )
         # RoPE init
@@ -343,7 +346,7 @@ class LLaMAHeadless(nn.Module):
             [param.device for param in self.parameters()]
             + [buffer.device for buffer in self.buffers()]
         ):
-            self.rot_emb.compute_freqs_cis(device, self.config.max_expected_seq_len)
+            self.rot_emb.compute_freqs_cis(device, self.config.max_expected_seq_len+self.config.chunk_size)
 
         layers = []
         for i in range(self.config.nlayers):
@@ -514,6 +517,7 @@ class LLaMAHeadless(nn.Module):
         enc_out = x_in
         if past_key_value_states[0] is None:
             # Prefill
+            assert prior.size(1) == self.config.chunk_size
             d_in = self.embedding(prior)
             if rank==0:
                 print("Running decoder prefill")
@@ -527,6 +531,8 @@ class LLaMAHeadless(nn.Module):
             # Decode the whole block
             out = []
             d_in = prior[:,-1:]
+            chunksize = self.config.chunk_size
+            kpos = torch.arange(chunksize, device=d_in.device).add(chunksize)[None]  # 1 c
             if rank==0:
                 print(f"Beginning mini-decode loop. Cache size is {past_key_value_states[-1][0].shape}")
             pos = torch.empty(1, 1, device=d_in.device, dtype=torch.int)
@@ -537,8 +543,8 @@ class LLaMAHeadless(nn.Module):
                     print(f"    DEC INP: {d_in[0][0]}")
                 d_in = self.embedding(d_in)
                 output = self.decoder[0](enc_out[:,i:i+1], d_in)
-                output, kv1 = self.decoder[1](output, enc_out, pos, use_cache=True, past_key_value_state=kv1)
-                output, kv2 = self.decoder[2](output, enc_out, pos, use_cache=True, past_key_value_state=kv2)
+                output, kv1 = self.decoder[1](output, enc_out, pos, kpos, use_cache=True, past_key_value_state=kv1)
+                output, kv2 = self.decoder[2](output, enc_out, pos, kpos, use_cache=True, past_key_value_state=kv2)
 
                 dec_out = output
                 dec_out = self.dec_norm(dec_out)
@@ -547,7 +553,7 @@ class LLaMAHeadless(nn.Module):
                 pred = head(dec_out)  # b 1 v
                 pred = pred.argmax(dim=-1)  # b 1
                 out.append(pred)
-                d_in = torch.ones_like(pred) * pred
+                d_in = pred
             if rank==0:
                 print(f"Mini-decode loop complete. Internal cache size is {kv1[0].shape}")
             dec_out = torch.cat(out, dim=1)  # b 128

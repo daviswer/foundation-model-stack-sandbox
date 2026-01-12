@@ -890,6 +890,7 @@ class GatedMultiHeadAttention(nn.Module):
         k: Optional[torch.Tensor] = None,
         v: Optional[torch.Tensor] = None,
         position_ids=None,
+        k_pos_ids=None,
         past_key_value_state: Optional[Tuple[Tensor | None, Tensor | None]] = None,
         use_cache=False,
         verbose=False,
@@ -923,16 +924,17 @@ class GatedMultiHeadAttention(nn.Module):
         # b x h x kvlen x ds
         # todo: Cross attention (This always is true for now)
         q_out, k_out, v_out, g_out = self.in_proj(q, k, v)
+        k_len = k_out.size(1)
         
         # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
         queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
-        keys = k_out.view(batch_size, -1, self.kvheads, self.emb_kq_per_head)
-        values = v_out.view(batch_size, -1, self.kvheads, self.emb_v_per_head)
+        keys = k_out.view(batch_size, k_len, self.kvheads, self.emb_kq_per_head)
+        values = v_out.view(batch_size, k_len, self.kvheads, self.emb_v_per_head)
 
         # You want to apply rotary embeddings pre-cache
         if self.position_encoder is not None:
             queries, keys = self.position_encoder.adjusted_qk(
-                queries, keys, position_ids, past_key_value_state, use_cache
+                queries, keys, position_ids, k_pos_ids, past_key_value_state, use_cache
             )
 
         attn_compute_dict = get_attention_type(**attn_kwargs)
