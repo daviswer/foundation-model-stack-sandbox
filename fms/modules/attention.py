@@ -608,22 +608,22 @@ class MultiHeadAttention(nn.Module):
             rates = static_src
 
             ## Option 1: Optimized Affinity-Kernel generation + Torch SDPA ##
-            r = self.nheads // self.kvheads
-            keys = keys.repeat(1, r, 1, 1)
-            values = values.repeat(1, r, 1, 1)
-            static_src = static_src.repeat(1, r, 1)
-            static_dest = static_dest.repeat(1, r, 1)
-            affs = self._gen_affinity_scores(keys, static_src, static_dest)
-            attn = F.scaled_dot_product_attention(
-                queries, 
-                keys,
-                values,
-                attn_mask=affs,
-                scale=1,
-            )  # b h l d
+            #r = self.nheads // self.kvheads
+            #keys = keys.repeat(1, r, 1, 1)
+            #values = values.repeat(1, r, 1, 1)
+            #static_src = static_src.repeat(1, r, 1)
+            #static_dest = static_dest.repeat(1, r, 1)
+            #affs = self._gen_affinity_scores(keys, static_src, static_dest)
+            #attn = F.scaled_dot_product_attention(
+            #    queries, 
+            #    keys,
+            #    values,
+            #    attn_mask=affs,
+            #    scale=1,
+            #)  # b h l d
 
             ## Option 2: Optimized multi-kernel implementation. ##
-            #attn, affs = self.UA(queries, keys, values, True, 1.3, static_src, static_dest)
+            attn, affs = self.UA(queries, keys, values, True, 1.3, static_src, static_dest)
 
             ## Baseline. ##
             #r = self.nheads // self.kvheads
