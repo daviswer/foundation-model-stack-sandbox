@@ -19,9 +19,9 @@ def _gen_affinity_scores(k, src, dest):
     affinity = kkt * src.pow(1/3).unsqueeze(-1) * dest.pow(1/3).unsqueeze(-2)
     affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())
     affinity = affinity.triu(1).cumsum(3)
-    return torch.transpose(affinity, -1, -2).contiguous().to(k.dtype)
+    #return torch.transpose(affinity, -1, -2).contiguous().to(k.dtype)
     ## Seems like this is the closest to the baseline loss wise. ##
-    #return torch.transpose(affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).tril(-1), -1.0e6), -1, -2).contiguous().to(k.dtype)
+    return torch.transpose(affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).tril(-1), -1.0e8), -1, -2).contiguous().to(k.dtype)
 
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q,  #
