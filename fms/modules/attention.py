@@ -611,8 +611,8 @@ class MultiHeadAttention(nn.Module):
             r = self.nheads // self.kvheads
             keys = keys.repeat(1, r, 1, 1)
             values = values.repeat(1, r, 1, 1)
-            static_src = static_src.repeat(1, r, 1, 1)
-            static_dest = static_dest.repeat(1, r, 1, 1)
+            static_src = static_src.repeat(1, r, 1)
+            static_dest = static_dest.repeat(1, r, 1)
             affs = self._gen_affinity_scores(keys, static_src, static_dest)
             attn = F.scaled_dot_product_attention(
                 queries, 
