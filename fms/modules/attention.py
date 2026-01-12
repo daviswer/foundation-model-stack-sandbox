@@ -933,6 +933,7 @@ class GatedMultiHeadAttention(nn.Module):
 
         # You want to apply rotary embeddings pre-cache
         if self.position_encoder is not None:
+            print(k_pos_ids)
             queries, keys = self.position_encoder.adjusted_qk(
                 queries, keys, position_ids, k_pos_ids, past_key_value_state, use_cache
             )
