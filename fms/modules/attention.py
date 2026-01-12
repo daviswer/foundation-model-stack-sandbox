@@ -742,7 +742,7 @@ class MultiHeadAttention(nn.Module):
         # You want to apply rotary embeddings pre-cache
         if self.position_encoder is not None:
             queries, keys = self.position_encoder.adjusted_qk(
-                queries, keys, position_ids, past_key_value_state, use_cache
+                queries, keys, position_ids, None, past_key_value_state, use_cache
             )
 
         attn_compute_dict = get_attention_type(**attn_kwargs)
@@ -934,10 +934,6 @@ class GatedMultiHeadAttention(nn.Module):
 
         # You want to apply rotary embeddings pre-cache
         if self.position_encoder is not None:
-            print(q_len, k_len)
-            if q_len != k_len:
-                print(k_pos_ids)
-                time.sleep(5)
             queries, keys = self.position_encoder.adjusted_qk(
                 queries, keys, position_ids, k_pos_ids, past_key_value_state, use_cache
             )
