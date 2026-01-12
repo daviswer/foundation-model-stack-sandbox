@@ -934,6 +934,7 @@ class GatedMultiHeadAttention(nn.Module):
 
         # You want to apply rotary embeddings pre-cache
         if self.position_encoder is not None:
+            print(q_len, k_len)
             if q_len != k_len:
                 print(k_pos_ids)
                 time.sleep(5)
