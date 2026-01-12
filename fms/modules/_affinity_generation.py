@@ -92,7 +92,7 @@ def _aff_fwd_kernel(
         prev_sum += curr_sum
         
         # .masked_fill(mask.tril(-1), -1e12)
-        affinity = tl.where((offs_i[:, None] > offs_j[None, :]), -1.0e8, affinity)
+        #affinity = tl.where((offs_i[:, None] > offs_j[None, :]), -1.0e8, affinity)
 
         tl.store(aff_ptr + offs_i[:, None] * str_aff_li + offs_j[None, :] * str_aff_lj, 
             affinity, mask=(offs_i[:, None] < L) & (offs_j[None, :] < L))
@@ -198,7 +198,7 @@ def _aff_bwd_kernel(
             mask=(offs_j[:, None] < L) & (offs_i[None, :] < L), other=0.0).cast(tl.float32)
         daffinity = tl.trans(daffinity)
 
-        daffinity = tl.where((offs_i[:, None] > offs_j[None, :]), 0.0, daffinity)
+        #daffinity = tl.where((offs_i[:, None] > offs_j[None, :]), 0.0, daffinity)
 
         # Correct reverse cumsum: first compute local cumsum, then add suffix from previous blocks
         daffinity_cs = tl.cumsum(daffinity, axis=1, reverse=True)
