@@ -528,6 +528,7 @@ class _attention(torch.autograd.Function):
         #dk_new, dsrc, ddest = _affinity_bwd(k, static_src, static_dest, daffinity)
         dk_new, dsrc, ddest = torch.autograd.grad(affinity, [k, static_src, static_dest], grad_outputs=daffinity)
         dk += dk_new
+        print(f'dq_grad: {dq.sum()}, dk_grad: {dk.sum()}, dv_grad: {dv.sum()}, dsrc: {dsrc.sum()}, ddest: {ddest.sum()}')
         return dq[:, :, :, :ctx.HEAD_DIM], dk[:,:,:,:ctx.HEAD_DIM], dv[:,:,:,:ctx.HEAD_DIM], None, None, dsrc, ddest, None
 
 attention = _attention.apply
