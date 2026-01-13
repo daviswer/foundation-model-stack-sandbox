@@ -510,8 +510,8 @@ class LLaMAHeadless(nn.Module):
         rank = int(os.environ["RANK"])
         if rank==0:
             print(f"Encoder complete. Cache length is {len(present_key_value_states)} with item size {present_key_value_states[0][0].shape}")
-            if present_key_value_states[0][0].size(2) > 128:
-                print(f"Output 128 is {x_in[0,0,:4].cpu()}")
+            if present_key_value_states[0][0].size(2) > self.config.chunk_size:
+                print(f"Output final is {x_in[0,0,:4].cpu()}")
         
         # Decoder time!
         enc_out = x_in
@@ -537,7 +537,7 @@ class LLaMAHeadless(nn.Module):
                 print(f"Beginning mini-decode loop. Cache size is {past_key_value_states[-1][0].shape}")
             pos = torch.empty(1, 1, device=d_in.device, dtype=torch.int)
             (kv1, kv2) = past_key_value_states[-2], past_key_value_states[-1]
-            for i in range(128):
+            for i in range(self.config.chunk_size):
                 pos[0,0] = past_key_value_states[-1][0].size(2) + i
                 if rank==0:
                     print(f"    DEC INP: {d_in[0][0]}")
