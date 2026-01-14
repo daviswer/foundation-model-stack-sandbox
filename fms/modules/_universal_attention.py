@@ -424,8 +424,8 @@ class _attention(torch.autograd.Function):
         desc_o = o
 
         ## Here, we launch an affinity matrix calculation kernel to simplify implementation. ##
-        desc_affinity = _affinity_fwd(k, static_src, static_dest)
-        #desc_affinity = _gen_affinity_scores(k, static_src, static_dest)
+        #desc_affinity = _affinity_fwd(k, static_src, static_dest)
+        desc_affinity = _gen_affinity_scores(k, static_src, static_dest)
 
         ## Specialize to this blk size for reasonable performance. ##
         BLOCK_M=128
@@ -447,8 +447,8 @@ class _attention(torch.autograd.Function):
             causal=causal,
             KV_H=KV_H,
             Q_H=Q_H,
-            num_warps=8,
-            num_stages=2,
+            num_warps=4 if HEAD_DIM_Q <= 64 else 8,
+            num_stages=4 if HEAD_DIM_Q <= 64 else 2,
             **extra_kern_args)
 
         ctx.save_for_backward(q, k, v, o, M, static_src, static_dest)
@@ -484,7 +484,9 @@ class _attention(torch.autograd.Function):
         BATCH, N_HEAD, N_CTX = q.shape[:3]
         PRE_BLOCK = 128
         NUM_WARPS, NUM_STAGES = 4, 3
-        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 64, 64, 32
+        ## This is the original config that works. ##
+        #BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 64, 64, 32
+        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 32, 32, 32
         BLK_SLICE_FACTOR = 2
         PRE_BLOCK = 128
         Q_H = N_HEAD // k.shape[1]
@@ -528,7 +530,6 @@ class _attention(torch.autograd.Function):
         #dk_new, dsrc, ddest = _affinity_bwd(k, static_src, static_dest, daffinity)
         dk_new, dsrc, ddest = torch.autograd.grad(affinity, [k, static_src, static_dest], grad_outputs=daffinity)
         dk += dk_new
-        print(f'dq_grad: {dq.sum()}, dk_grad: {dk.sum()}, dv_grad: {dv.sum()}, dsrc: {dsrc.sum()}, ddest: {ddest.sum()}')
         return dq[:, :, :, :ctx.HEAD_DIM], dk[:,:,:,:ctx.HEAD_DIM], dv[:,:,:,:ctx.HEAD_DIM], None, None, dsrc, ddest, None
 
 attention = _attention.apply
