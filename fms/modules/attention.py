@@ -623,7 +623,7 @@ class MultiHeadAttention(nn.Module):
             #)  # b h l d
 
             ## Option 2: Optimized multi-kernel implementation. ##
-            attn, affs = self.UA(queries, keys, values, True, 1.3, static_src, static_dest)
+            attn, affs = self.UA(queries, keys, values, True, 1.3, static_src, static_dest, True, False) ## The last flag toggles AC on/off. Turn to true if OOM is hit for additional memory savings.
 
             ## Baseline. ##
             #r = self.nheads // self.kvheads

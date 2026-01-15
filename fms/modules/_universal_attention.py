@@ -391,7 +391,7 @@ def _attn_bwd(Q, K, V, AFFINITY, sm_scale,  #
 class _attention(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, q, k, v, causal, sm_scale, static_src=None, static_dest=None, warp_specialize=True):
+    def forward(ctx, q, k, v, causal, sm_scale, static_src=None, static_dest=None, warp_specialize=True, ac=False):
         assert causal, 'currently, only support causal-autoregressive style generation only.'
         #assert q.shape[2] > 0 and (q.shape[2] & (q.shape[2] - 1)) == 0, 'Currently only works for powers of 2. Trying to debug other paths. Masking is non-trivial'
         assert q.shape[2] % 128 == 0, 'Only works for multiples of 128!'
@@ -425,7 +425,11 @@ class _attention(torch.autograd.Function):
 
         ## Here, we launch an affinity matrix calculation kernel to simplify implementation. ##
         #desc_affinity = _affinity_fwd(k, static_src, static_dest)
-        desc_affinity = _gen_affinity_scores(k, static_src, static_dest)
+        if not ac:
+            with torch.enable_grad():
+                desc_affinity = _gen_affinity_scores(k, static_src, static_dest)
+        else:
+            desc_affinity = _gen_affinity_scores(k, static_src, static_dest)
 
         ## Specialize to this blk size for reasonable performance. ##
         BLOCK_M=128
@@ -451,15 +455,23 @@ class _attention(torch.autograd.Function):
             num_stages=4 if HEAD_DIM_Q <= 64 else 2,
             **extra_kern_args)
 
-        ctx.save_for_backward(q, k, v, o, M, static_src, static_dest)
+        if not ac:
+            ctx.save_for_backward(q, k, v, o, M, static_src, static_dest, desc_affinity)
+        else:
+            ctx.save_for_backward(q, k, v, o, M, static_src, static_dest)
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM = HEAD_DIM_K
         ctx.causal = causal
+        ctx.ac = ac
         return o[:, :, :, :HEAD_DIM_K], desc_affinity
 
     @staticmethod
     def backward(ctx, do, dlastaff):
-        q, k, v, o, M, static_src, static_dest = ctx.saved_tensors
+        if not ctx.ac:
+            q, k, v, o, M, static_src, static_dest, affinity = ctx.saved_tensors
+        else:
+            q, k, v, o, M, static_src, static_dest = ctx.saved_tensors
+
         do = do.contiguous()
         dlasaff = dlastaff.contiguous()
         assert do.is_contiguous()
@@ -504,8 +516,9 @@ class _attention(torch.autograd.Function):
 
         ## Recompute affinity scores. ##
         #affinity = _affinity_fwd(k, static_src, static_dest)
-        with torch.enable_grad():
-            affinity = _gen_affinity_scores(k, static_src, static_dest)
+        if ctx.ac:
+            with torch.enable_grad():
+                affinity = _gen_affinity_scores(k, static_src, static_dest)
 
         daffinity = torch.zeros(affinity.shape[0], Q_H * KV_H, N_CTX, N_CTX, dtype=affinity.dtype, device=affinity.device)
 
@@ -530,6 +543,6 @@ class _attention(torch.autograd.Function):
         #dk_new, dsrc, ddest = _affinity_bwd(k, static_src, static_dest, daffinity)
         dk_new, dsrc, ddest = torch.autograd.grad(affinity, [k, static_src, static_dest], grad_outputs=daffinity)
         dk += dk_new
-        return dq[:, :, :, :ctx.HEAD_DIM], dk[:,:,:,:ctx.HEAD_DIM], dv[:,:,:,:ctx.HEAD_DIM], None, None, dsrc, ddest, None
+        return dq[:, :, :, :ctx.HEAD_DIM], dk[:,:,:,:ctx.HEAD_DIM], dv[:,:,:,:ctx.HEAD_DIM], None, None, dsrc, ddest, None, None
 
 attention = _attention.apply
