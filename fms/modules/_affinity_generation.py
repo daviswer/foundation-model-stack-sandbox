@@ -94,8 +94,11 @@ def _aff_fwd_kernel(
         # .masked_fill(mask.tril(-1), -1e12)
         affinity = tl.where((offs_i[:, None] > offs_j[None, :]), -1.0e8, affinity)
 
-        tl.store(aff_ptr + offs_i[:, None] * str_aff_li + offs_j[None, :] * str_aff_lj, 
-            affinity, mask=(offs_i[:, None] < L) & (offs_j[None, :] < L))
+        #tl.store(aff_ptr + offs_i[:, None] * str_aff_li + offs_j[None, :] * str_aff_lj, 
+        #    affinity, mask=(offs_i[:, None] < L) & (offs_j[None, :] < L))
+        tl.store(aff_ptr + offs_j[:, None] * str_aff_li + offs_i[None, :] * str_aff_lj, 
+                    tl.trans(affinity), mask=(offs_j[:, None] < L) & (offs_i[None, :] < L))
+
 
 def _affinity_fwd(k, src, dest):
     '''
@@ -123,7 +126,8 @@ def _affinity_fwd(k, src, dest):
         B=b, H=h, L=l, D=d, BLOCK_D=d,
     )
 
-    return aff.transpose(-1, -2).to(k.dtype)
+    #return aff.transpose(-1, -2).to(k.dtype)
+    return aff
 
 '''
 #######################################
