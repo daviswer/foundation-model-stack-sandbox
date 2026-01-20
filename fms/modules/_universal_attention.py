@@ -458,7 +458,7 @@ class _attention(torch.autograd.Function):
         ctx.HEAD_DIM = HEAD_DIM_K
         ctx.causal = causal
         ctx.ac = ac
-        return o[:, :, :, :HEAD_DIM_K], desc_affinity
+        return o[:, :, :, :HEAD_DIM_K], desc_affinity[:, :, -1, :].exp()
 
     @staticmethod
     def backward(ctx, do, dlastaff):
@@ -527,7 +527,8 @@ class _attention(torch.autograd.Function):
             HEAD_DIM=do.shape[-1],  #
             causal=ctx.causal,
             num_warps=NUM_WARPS,  #
-            num_stages=NUM_STAGES  #
+            num_stages=NUM_STAGES, #
+            maxnreg=168
         )
 
         daffinity = torch.reshape(daffinity, (daffinity.shape[0], Q_H, KV_H, daffinity.shape[2], daffinity.shape[3])).sum(1, keepdim=False)
