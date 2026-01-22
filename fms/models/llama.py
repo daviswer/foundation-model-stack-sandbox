@@ -20,7 +20,7 @@ from fms.modules.attention import (
     get_attention_type,
 )
 from fms.modules.feedforward import GatedLinearUnit
-from fms.modules.head import LinearClassificationHead
+from fms.modules.head import LinearClassificationHead, CFGHead
 from fms.modules.layernorm import LayerNormParameterized
 from fms.modules.linear import get_linear_type
 from fms.modules.positions import RotaryEmbedding
@@ -397,6 +397,7 @@ class LLaMA(nn.Module):
             self.head = self.distributed_strategy.distribute_module(head)
         else:
             self.head = head
+        self.mlp = CFGHead(self.config.emb_dim, self.config.src_vocab_size)
 
     def get_config(self) -> LLaMAConfig:
         return self.config
@@ -446,6 +447,7 @@ class LLaMA(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
+        targ: torch.Tensor,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value_states: Optional[Tuple[torch.FloatTensor,]] = None,
         use_cache: bool = False,
@@ -458,12 +460,13 @@ class LLaMA(nn.Module):
             past_key_value_states=past_key_value_states,
             **attn_kwargs,
         )
-        output, cache = self.base_model(
+        output, embeds = self.base_model(
             x, position_ids, past_key_value_states, use_cache, **attn_kwargs
         )
 
-        output = gather_outputs(output, last_n_tokens, **attn_kwargs)
-        preds = self.head(output)
+        # output = gather_outputs(output, last_n_tokens, **attn_kwargs)
+        dumb_loss, loss, train_loss = self.mlp(output, embeds, targ, self.head)
+        return dumb_loss, loss, train_loss
 
         if use_cache:
             return preds, cache

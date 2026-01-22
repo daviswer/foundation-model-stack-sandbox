@@ -11,6 +11,7 @@ from fms.distributed.tensorparallel import (
     copy_to_tensor_model_parallel_region,
 )
 from fms.modules.tp import TPModule
+from fms.modules.layernorm import LayerNormParameterized
 
 
 class MLPClassificationHead(nn.Module):
@@ -84,6 +85,36 @@ class MLPClassificationHead(nn.Module):
             x = self.ln(x)
         x = self.head(x)
         return x
+    
+
+class CFGHead(nn.Module):
+    def __init__(self, emb_dim, vocab_size):
+        super().__init__()
+        self.d = emb_dim
+        self.v = vocab_size
+        self.mlp = nn.Sequential(
+            nn.Linear(2*emb_dim, 2*emb_dim, bias=False),
+            nn.SiLU(),
+            nn.Linear(2*emb_dim, emb_dim, bias=False),
+            LayerNormParameterized(emb_dim, use_high_precision_pow=True),
+        )
+        self.criterion = nn.CrossEntropyLoss()
+
+    def forward(self, latent, embeds, targ, head):
+        # latent: b n d  (0...n-1)
+        # embeds: b n d  (0...n-1)
+        # targ: b n  (1...n)
+        pred = head(latent)  # b n v  (0...n-1)
+        prior_embeds = embeds.roll(1, dims=1)
+        prior_embeds[:,0] = 0  # (_, 0...n-2)
+        dumb_pred = torch.cat((latent, prior_embeds), dim=2)  # b n 2d
+        dumb_pred = self.mlp(dumb_pred)  # b n d
+        dumb_pred = head(dumb_pred)  # b n d  (_, 1...n-1)
+        dumb_loss = self.criterion(dumb_pred.reshape(-1, self.v), targ.view(-1))
+        with torch.no_grad():
+            loss = self.criterion(pred.reshape(-1, self.v), targ.view(-1))
+        train_loss = self.criterion(pred.mul(2/3).add(dumb_pred.mul(1/3)).reshape(-1, self.v), targ.view(-1))
+        return dumb_loss, loss, train_loss
 
 
 class LinearClassificationHead(nn.Linear):
