@@ -452,6 +452,7 @@ class LLaMA(nn.Module):
         past_key_value_states: Optional[Tuple[torch.FloatTensor,]] = None,
         use_cache: bool = False,
         last_n_tokens: int = 0,
+        zl_coeff: float = 1e-4,
         **attn_kwargs: Unpack[AttentionKwargs],
     ):
         get_attention_type(**attn_kwargs)["validate_attn_kwargs"](
@@ -465,7 +466,7 @@ class LLaMA(nn.Module):
         )
 
         # output = gather_outputs(output, last_n_tokens, **attn_kwargs)
-        dumb_loss, loss, train_loss = self.mlp(output, embeds, targ, self.head)
+        dumb_loss, loss, train_loss = self.mlp(output, embeds, targ, self.head, zl_coeff)
         return dumb_loss, loss, train_loss
 
         if use_cache:
