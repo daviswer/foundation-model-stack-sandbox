@@ -343,6 +343,7 @@ class LLaMAHeadless(nn.Module):
         if past_key_value_states is None or len(past_key_value_states) == 0:
             past_key_value_states = [None for _ in range(len(self.layers))]
         x_in = self.embedding(x_in)
+        embeds = x_in
 
         # this is the output cache for all the decoder layers
         present_key_value_states = []
@@ -367,7 +368,7 @@ class LLaMAHeadless(nn.Module):
         if self.config.p_dropout:
             dec_out = self.dropout(dec_out)
 
-        return dec_out, present_key_value_states
+        return dec_out, embeds
 
 
 class LLaMA(nn.Module):

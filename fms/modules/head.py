@@ -104,6 +104,7 @@ class CFGHead(nn.Module):
         # latent: b n d  (0...n-1)
         # embeds: b n d  (0...n-1)
         # targ: b n  (1...n)
+        targ = targ.long()
         pred = head(latent)  # b n v  (0...n-1)
         prior_embeds = embeds.roll(1, dims=1)
         prior_embeds[:,0] = 0  # (_, 0...n-2)
