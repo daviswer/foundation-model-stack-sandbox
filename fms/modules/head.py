@@ -112,12 +112,13 @@ class CFGHead(nn.Module):
         dumb_pred = self.mlp(dumb_pred)  # b n d
         dumb_pred = head(dumb_pred)  # b n d  (_, 1...n-1)
         dumb_loss = self.criterion(dumb_pred.reshape(-1, self.v), targ.view(-1)) + zl_coeff * torch.logsumexp(dumb_pred, dim=-1).pow(2).mean()
-        with torch.no_grad():
-            loss = self.criterion(pred.reshape(-1, self.v), targ.view(-1))
-        train_pred = pred.add(dumb_pred.detach()).div(2)
-        train_loss = self.criterion(train_pred.reshape(-1, self.v), targ.view(-1))
-        train_loss = train_loss + zl_coeff * torch.logsumexp(train_pred, dim=-1).pow(2).mean()
-        return dumb_loss, loss, train_loss
+        loss = self.criterion(pred.reshape(-1, self.v), targ.view(-1)) + zl_coeff * torch.logsumexp(dumb_pred, dim=-1).pow(2).mean()
+        # with torch.no_grad():
+        #     loss = self.criterion(pred.reshape(-1, self.v), targ.view(-1))
+        # train_pred = pred.add(dumb_pred.detach()).div(2)
+        # train_loss = self.criterion(train_pred.reshape(-1, self.v), targ.view(-1))
+        # train_loss = train_loss + zl_coeff * torch.logsumexp(train_pred, dim=-1).pow(2).mean()
+        return dumb_loss, loss, loss
 
 
 class LinearClassificationHead(nn.Linear):
