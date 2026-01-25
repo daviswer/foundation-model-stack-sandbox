@@ -101,15 +101,12 @@ class CFGHead(nn.Module):
         self.criterion = nn.CrossEntropyLoss()
 
     def reset_parameters(self):
-
         for layer in [self.mlp[0], self.mlp[1]]:
-            print("GOTHERE")
             nn.init.trunc_normal_(
                 layer.weight,
                 mean=0.0,
                 std=0.02,
             )
-        self.mlp[3].reset_parameters()
 
     def forward(self, latent, embeds, targ, head, zl_coeff):
         # latent: b n d  (0...n-1)
@@ -121,6 +118,7 @@ class CFGHead(nn.Module):
         prior_embeds[:,0] = 0  # (_, 0...n-2)
         dumb_pred = torch.cat((latent, prior_embeds), dim=2)  # b n 2d
         dumb_pred = self.mlp(dumb_pred)  # b n d
+        print(dumb_pred.pow(2).mean().item())
         dumb_pred = head(dumb_pred)  # b n d  (_, 1...n-1)
         dumb_loss = self.criterion(dumb_pred.reshape(-1, self.v), targ.view(-1)) + zl_coeff * torch.logsumexp(dumb_pred, dim=-1).pow(2).mean()
         # with torch.no_grad():
