@@ -409,11 +409,8 @@ class LLaMA(nn.Module):
 
     def reset_parameters(self):
         # Call reset_parameters for relevant sub-layers
-        assert isinstance(self.head, torch.nn.Linear)
-        self.head.weight.data.normal_(
-            0,
-            1 / math.sqrt(math.sqrt(self.config.emb_dim * self.config.src_vocab_size)),
-        )
+        self.head.reset_parameters()
+        self.mlp.reset_parameters()
         self.base_model.reset_parameters()
 
     def validate_reset_parameters(self):

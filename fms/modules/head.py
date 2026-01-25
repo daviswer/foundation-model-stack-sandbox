@@ -134,6 +134,9 @@ class LinearClassificationHead(nn.Linear):
     # To differentiate for TP
     def forward(self, input):
         return super().forward(input)
+    
+    def reset_parameters(self):
+        self.weight.data.normal_(0, self.weight.data.numel().pow(-.25))
 
     def to_tp(self, group: ProcessGroup) -> "TPLinearClassificationHead":
         return TPLinearClassificationHead.import_module(self, group)
