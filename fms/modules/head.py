@@ -102,7 +102,7 @@ class CFGHead(nn.Module):
 
     def reset_parameters(self):
         print(".   Resetting cfghead")
-        for layer in [self.mlp[0], self.mlp[1]]:
+        for layer in [self.mlp[0], self.mlp[2]]:
             nn.init.trunc_normal_(
                 layer.weight,
                 mean=0.0,
