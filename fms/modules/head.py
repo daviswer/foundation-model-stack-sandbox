@@ -137,7 +137,7 @@ class LinearClassificationHead(nn.Linear):
         return super().forward(input)
     
     def reset_parameters(self):
-        self.weight.data.normal_(0, self.weight.data.numel().pow(-.25))
+        self.weight.data.normal_(0, self.weight.data.numel()**-.25)
 
     def to_tp(self, group: ProcessGroup) -> "TPLinearClassificationHead":
         return TPLinearClassificationHead.import_module(self, group)
