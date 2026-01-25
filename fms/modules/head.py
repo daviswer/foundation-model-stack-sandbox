@@ -108,6 +108,7 @@ class CFGHead(nn.Module):
                 mean=0.0,
                 std=0.02,
             )
+        self.mlp[3].reset_parameters()
 
     def forward(self, latent, embeds, targ, head, zl_coeff):
         # latent: b n d  (0...n-1)
