@@ -101,13 +101,15 @@ class CFGHead(nn.Module):
         self.criterion = nn.CrossEntropyLoss()
 
     def reset_parameters(self):
+
         for layer in [self.mlp[0], self.mlp[1]]:
+            print("GOTHERE")
             nn.init.trunc_normal_(
                 layer.weight,
                 mean=0.0,
                 std=0.02,
             )
-        self.mlp[3].weight.data.fill_(1)
+        self.mlp[3].reset_parameters()
 
     def forward(self, latent, embeds, targ, head, zl_coeff):
         # latent: b n d  (0...n-1)
