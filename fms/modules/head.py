@@ -88,7 +88,7 @@ class MLPClassificationHead(nn.Module):
     
 
 class CFGHead(nn.Module):
-    def __init__(self, emb_dim, vocab_size):
+    def __init__(self, emb_dim, vocab_size, mix_denom):
         super().__init__()
         self.d = emb_dim
         self.v = vocab_size
@@ -99,6 +99,9 @@ class CFGHead(nn.Module):
             LayerNormParameterized(emb_dim, use_high_precision_pow=True),
         )
         self.criterion = nn.CrossEntropyLoss()
+        self.mix_coeff = 0 if mix_denom==0 else 1/mix_denom
+        self.inp_ln = LayerNormParameterized(emb_dim, use_high_precision_pow=True)
+        self.zeroed = False
 
     def reset_parameters(self):
         for layer in [self.mlp[0], self.mlp[2]]:
@@ -107,7 +110,8 @@ class CFGHead(nn.Module):
                 mean=0.0,
                 std=0.02,
             )
-        self.mlp[3].reset_parameters()
+        self.inp_ln.reset_parameters()
+        self.mlp[3].weight.zero_()  # This only works when low_cpu_fsdp is False!!!
 
     def forward(self, latent, embeds, targ, head, zl_coeff):
         # latent: b n d  (0...n-1)
@@ -123,7 +127,7 @@ class CFGHead(nn.Module):
         dumb_loss = self.criterion(dumb_pred.reshape(-1, self.v), targ.view(-1)) + zl_coeff * torch.logsumexp(dumb_pred, dim=-1).pow(2).mean()
         with torch.no_grad():
             loss = self.criterion(pred.reshape(-1, self.v), targ.view(-1)) + zl_coeff * torch.logsumexp(pred, dim=-1).pow(2).mean()
-        train_pred = pred.mul(2/3).add(dumb_pred.mul(1/3))
+        train_pred = pred.mul(1-self.mix_coeff).add(dumb_pred.mul(self.mix_coeff))
         train_loss = self.criterion(train_pred.reshape(-1, self.v), targ.view(-1))
         train_loss = train_loss + zl_coeff * torch.logsumexp(train_pred, dim=-1).pow(2).mean()
         return dumb_loss, loss, train_loss

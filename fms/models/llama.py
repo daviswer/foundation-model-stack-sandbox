@@ -61,6 +61,7 @@ class LLaMAConfig(ModelConfig):
     rope_scaling: dict = field(default_factory=lambda: {})
     linear_config: Optional[Mapping[str, Any]] = None
     fused_weights: bool = True
+    mix_denom: float = 2.0
 
 
 class LLaMABlock(nn.Module):
@@ -398,7 +399,7 @@ class LLaMA(nn.Module):
             self.head = self.distributed_strategy.distribute_module(head)
         else:
             self.head = head
-        self.mlp = CFGHead(self.config.emb_dim, self.config.src_vocab_size)
+        self.mlp = CFGHead(self.config.emb_dim, self.config.src_vocab_size, self.config.mix_denom)
 
     def get_config(self) -> LLaMAConfig:
         return self.config
