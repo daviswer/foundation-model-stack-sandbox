@@ -119,7 +119,7 @@ class CFGHead(nn.Module):
         # targ: b n  (1...n)
         targ = targ.long()
         pred = head(latent)  # b n v  (0...n-1)
-        prior_embeds = embeds.roll(1, dims=1)
+        prior_embeds = self.inp_ln(embeds.roll(1, dims=1))
         prior_embeds[:,0] = 0  # (_, 0...n-2)
         dumb_pred = torch.cat((latent, prior_embeds), dim=2)  # b n 2d
         dumb_pred = self.mlp(dumb_pred)  # b n d
@@ -127,7 +127,7 @@ class CFGHead(nn.Module):
         dumb_loss = self.criterion(dumb_pred.reshape(-1, self.v), targ.view(-1)) + zl_coeff * torch.logsumexp(dumb_pred, dim=-1).pow(2).mean()
         with torch.no_grad():
             loss = self.criterion(pred.reshape(-1, self.v), targ.view(-1)) + zl_coeff * torch.logsumexp(pred, dim=-1).pow(2).mean()
-        train_pred = pred.mul(1-self.mix_coeff).add(dumb_pred.mul(self.mix_coeff).detach())
+        train_pred = pred.mul(1-self.mix_coeff).add(dumb_pred.mul(self.mix_coeff))
         train_loss = self.criterion(train_pred.reshape(-1, self.v), targ.view(-1))
         train_loss = train_loss + zl_coeff * torch.logsumexp(train_pred, dim=-1).pow(2).mean()
         return dumb_loss, loss, train_loss
