@@ -492,7 +492,7 @@ class _attention(torch.autograd.Function):
         NUM_WARPS, NUM_STAGES = 4, 2
         ## This is the original config that works. ##
         #BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 64, 64, 32
-        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 64, 32, 32
+        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 32, 32, 32
         BLK_SLICE_FACTOR = 2
         PRE_BLOCK = 128
         Q_H = N_HEAD // k.shape[1]
