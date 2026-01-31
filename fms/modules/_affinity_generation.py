@@ -12,9 +12,8 @@ configs = [
 ]
 
 # Optimal config tuned on A100
-fwd_A100 = [triton.Config({'BLOCK_I': 16, 'BLOCK_J': 128}, num_stages=2, num_warps=4)]
-#bwd_A100 = [triton.Config({'BLOCK_I': 16, 'BLOCK_J': 32}, num_stages=2, num_warps=2)]
-bwd_A100 = [triton.Config({'BLOCK_I': 64, 'BLOCK_J': 16}, num_stages=2, num_warps=4)]
+fwd_A100 = [triton.Config({'BLOCK_I': 32, 'BLOCK_J': 128}, num_stages=2, num_warps=4)]
+bwd_A100 = [triton.Config({'BLOCK_I': 32, 'BLOCK_J': 32}, num_stages=2, num_warps=2)]
 bwd_col_A100 = [triton.Config({'BLOCK_I': 64, 'BLOCK_J': 32}, num_stages=2, num_warps=2)]
 
 '''
@@ -335,7 +334,6 @@ def _affinity_bwd(k, src, dest, daff):
         dk_i.stride(0), dk_i.stride(1), dk_i.stride(2), dk_i.stride(3), 
         dsrc.stride(0), dsrc.stride(1), dsrc.stride(2),  
         B=b, H=h, L=l, D=d, BLOCK_D=d,
-        maxnreg=168
     )
 
     grid_j = lambda META: (b, h, triton.cdiv(l, META['BLOCK_J']))
