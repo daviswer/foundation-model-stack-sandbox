@@ -111,7 +111,7 @@ class CFGHead(nn.Module):
                 std=0.02,
             )
         self.inp_ln.reset_parameters()
-        self.mlp[3].weight.data.zero_()  # This only works when low_cpu_fsdp is False!!!
+        self.mlp[3].reset_parameters()  # This only works when low_cpu_fsdp is False!!!
 
     def forward(self, latent, embeds, targ, head, zl_coeff):
         # latent: b n d  (0...n-1)
@@ -127,7 +127,7 @@ class CFGHead(nn.Module):
         dumb_loss = self.criterion(dumb_pred.reshape(-1, self.v), targ.view(-1)) + zl_coeff * torch.logsumexp(dumb_pred, dim=-1).pow(2).mean()
         with torch.no_grad():
             loss = self.criterion(pred.reshape(-1, self.v), targ.view(-1)) + zl_coeff * torch.logsumexp(pred, dim=-1).pow(2).mean()
-        train_pred = pred.mul(1-self.mix_coeff).add(dumb_pred.mul(self.mix_coeff).detach())
+        train_pred = pred.mul(1-self.mix_coeff).add(dumb_pred.mul(self.mix_coeff))
         train_loss = self.criterion(train_pred.reshape(-1, self.v), targ.view(-1))
         train_loss = train_loss + zl_coeff * torch.logsumexp(train_pred, dim=-1).pow(2).mean()
         return dumb_loss, loss, train_loss
