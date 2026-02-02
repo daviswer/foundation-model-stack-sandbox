@@ -111,7 +111,7 @@ class CFGHead(nn.Module):
                 std=0.02,
             )
         self.inp_ln.reset_parameters()
-        self.mlp[3].reset_parameters()  # This only works when low_cpu_fsdp is False!!!
+        self.mlp[3].weight.data.fill_(1/self.d**.5)  # reset_parameters()  # This only works when low_cpu_fsdp is False!!!
 
     def forward(self, latent, embeds, targ, head, zl_coeff):
         # latent: b n d  (0...n-1)
