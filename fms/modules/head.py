@@ -93,10 +93,11 @@ class CFGHead(nn.Module):
         self.d = emb_dim
         self.v = vocab_size
         self.mlp = nn.Sequential(
-            nn.Linear(2*emb_dim, 2*emb_dim, bias=False),
-            nn.SiLU(),
             nn.Linear(2*emb_dim, emb_dim, bias=False),
-            LayerNormParameterized(emb_dim, use_high_precision_pow=True),
+            nn.SiLU(),
+            nn.Linear(emb_dim, emb_dim//2, bias=False),
+            LayerNormParameterized(emb_dim//2, use_high_precision_pow=True),
+            nn.Linear(emb_dim//2, vocab_size, bias=False),
         )
         self.criterion = nn.CrossEntropyLoss()
         self.mix_coeff = 0 if mix_denom==0 else 1/mix_denom
@@ -111,7 +112,8 @@ class CFGHead(nn.Module):
                 std=0.02,
             )
         self.inp_ln.reset_parameters()
-        self.mlp[3].weight.data.fill_(1/3)  # reset_parameters()  # This only works when low_cpu_fsdp is False!!!
+        self.mlp[3].reset_parameters()  # This only works when low_cpu_fsdp is False!!!
+        self.mlp[4].weight.data.normal_(0, self.mlp[4].weight.data.numel()**-.25)
 
     def forward(self, latent, embeds, targ, head, zl_coeff):
         # latent: b n d  (0...n-1)
@@ -122,8 +124,8 @@ class CFGHead(nn.Module):
         prior_embeds = self.inp_ln(embeds.roll(1, dims=1))
         prior_embeds[:,0] = 0  # (_, 0...n-2)
         dumb_pred = torch.cat((latent, prior_embeds), dim=2)  # b n 2d
-        dumb_pred = self.mlp(dumb_pred)  # b n d
-        dumb_pred = head(dumb_pred)  # b n d  (_, 1...n-1)
+        dumb_pred = self.mlp(dumb_pred)  # b n d  (_, 1...n-1)
+        # dumb_pred = head(dumb_pred)  # b n d  (_, 1...n-1)
         dumb_loss = self.criterion(dumb_pred.reshape(-1, self.v), targ.view(-1)) + zl_coeff * torch.logsumexp(dumb_pred, dim=-1).pow(2).mean()
         with torch.no_grad():
             loss = self.criterion(pred.reshape(-1, self.v), targ.view(-1)) + zl_coeff * torch.logsumexp(pred, dim=-1).pow(2).mean()
