@@ -13,6 +13,36 @@ def is_cuda():
 def supports_host_descriptor():
     return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
 
+def get_fwd_tune_config():
+    configs = []
+    for M in [32, 64, 128]:
+        for N in [32, 64, 128]:
+            for stage in [2, 3, 4]:
+                for warp in [4, 8]:
+                    configs.append(triton.Config({'BLOCK_M': M, 'BLOCK_N': N}, num_stages=stage,
+                                    num_warps=warp))
+    #optimal_config = [triton.Config({'BLOCK_M': 128,'BLOCK_N': 64}, num_stages=2, num_warps=8)]
+    #configs = optimal_config
+    print(f'fwd config size: {len(configs)}')
+    return configs
+
+def get_bwd_tune_config():
+    configs = []
+    for M1 in [32, 64]:
+        for M2 in [32, 64]:
+            for N1 in [32, 64]:
+                for N2 in [32, 64]:
+                    for stage in [2, 3, 4]:
+                        for warp in [4, 8]:
+                            if M2 % N2 == 0 and N1 % M1 == 0 and M2 == M1 and N2 == N1:
+                                configs.append(triton.Config({'BLOCK_M1': M1, 'BLOCK_M2': M2, 'BLOCK_N1': N1, 'BLOCK_N2': N2}, 
+                                                num_stages=stage, num_warps=warp))
+    #optimal_config = [triton.Config({'BLOCK_M1': 32, 'BLOCK_M2': 32, 'BLOCK_N1': 64, 'BLOCK_N2': 32}, 
+    #                                            num_stages=2, num_warps=4)]
+    #configs = optimal_config
+    print(f'bwd config size: {len(configs)}')
+    return configs
+
 @torch.compile
 def _gen_affinity_scores(k, src, dest):
     kkt = torch.einsum('bnqh, bnkh -> bnqk', k, k).relu().pow(2/3).float()
@@ -83,6 +113,10 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         offseta_y += BLOCK_N
     return acc, l_i, m_i
 
+@triton.autotune(
+    configs=get_fwd_tune_config(),
+    key=['N_CTX', 'HEAD_DIM'],
+)
 @triton.jit
 def _attn_fwd(sm_scale, M,  #
               Z, H, desc_q, desc_k, desc_v, desc_o, desc_affinity,
@@ -270,6 +304,10 @@ def _attn_bwd_dq(dq, q, K, V, AFFINITY,  #
         daffinity_ptrs += step_n  # Update daffinity pointer to next block
     return dq
 
+@triton.autotune(
+    configs=get_bwd_tune_config(),
+    key=['HEAD_DIM', 'stride_z'], 
+)
 @triton.jit
 def _attn_bwd(Q, K, V, AFFINITY, sm_scale,  #
               DO,  #
@@ -429,7 +467,8 @@ class _attention(torch.autograd.Function):
         ## Specialize to this blk size for reasonable performance. ##
         BLOCK_M=128
         BLOCK_N=64
-        grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
+        grid = lambda META: (triton.cdiv(q.shape[2], META['BLOCK_M']), q.shape[0] * q.shape[1], 1)
+        #grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
 
         ctx.grid = grid
         _attn_fwd[grid](
@@ -438,16 +477,16 @@ class _attention(torch.autograd.Function):
             desc_q, desc_k, desc_v, desc_o, desc_affinity,  #
             N_CTX=q.shape[2],  #
             HEAD_DIM=q.shape[-1],  #
-            BLOCK_M=BLOCK_M, # Comment out after debugging finishes.
-            BLOCK_N=BLOCK_N, # Comment out after debugging finishes.
+            #BLOCK_M=BLOCK_M, # Comment out after debugging finishes.
+            #BLOCK_N=BLOCK_N, # Comment out after debugging finishes.
             FP8_OUTPUT=False,
             STAGE=stage,  #
             warp_specialize=warp_specialize,  #
             causal=causal,
             KV_H=KV_H,
             Q_H=Q_H,
-            num_warps=4 if HEAD_DIM_Q <= 64 else 8,
-            num_stages=4 if HEAD_DIM_Q <= 64 else 2,
+            #num_warps=4 if HEAD_DIM_Q <= 64 else 8,
+            #num_stages=4 if HEAD_DIM_Q <= 64 else 2,
             **extra_kern_args)
 
         if not ac:
@@ -514,20 +553,21 @@ class _attention(torch.autograd.Function):
 
         daffinity = torch.zeros(affinity.shape[0], Q_H * KV_H, N_CTX, N_CTX, dtype=affinity.dtype, device=affinity.device)
 
-        grid = (triton.cdiv(N_CTX, BLOCK_N1), 1, BATCH * N_HEAD)
+        grid = lambda META: (triton.cdiv(N_CTX, META['BLOCK_N1']), 1, BATCH * N_HEAD) 
+        #grid = (triton.cdiv(N_CTX, BLOCK_N1), 1, BATCH * N_HEAD)
         scale = 1.0 / ctx.HEAD_DIM**0.5
         _attn_bwd[grid](
             q, k, v, affinity, scale, do, dq, dk, dv, daffinity,  #
             M, delta,  #
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
             Q_H, KV_H, N_CTX,  #
-            BLOCK_M1=BLOCK_M1, BLOCK_N1=BLOCK_N1,  #
-            BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,  #
+            #BLOCK_M1=BLOCK_M1, BLOCK_N1=BLOCK_N1,  #
+            #BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,  #
             BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
             HEAD_DIM=do.shape[-1],  #
             causal=ctx.causal,
-            num_warps=NUM_WARPS,  #
-            num_stages=NUM_STAGES, #
+            #num_warps=NUM_WARPS,  #
+            #num_stages=NUM_STAGES, #
         )
 
         daffinity = torch.reshape(daffinity, (daffinity.shape[0], Q_H, KV_H, daffinity.shape[2], daffinity.shape[3])).sum(1, keepdim=False)
