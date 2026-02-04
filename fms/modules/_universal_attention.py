@@ -43,6 +43,12 @@ def get_bwd_tune_config():
     print(f'bwd config size: {len(configs)}')
     return configs
 
+# Optimal config for 1b model on A100 with fsdp
+configs_A100 = {
+    "_attn_fwd": [triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32}, num_warps=8, num_stages=2)],
+    "_attn_bwd": [triton.Config({'BLOCK_M1': 64, 'BLOCK_M2': 64, 'BLOCK_N1': 64, 'BLOCK_N2': 64}, num_warps=8, num_stages=2)],
+}
+
 @torch.compile
 def _gen_affinity_scores(k, src, dest):
     kkt = torch.einsum('bnqh, bnkh -> bnqk', k, k).relu().pow(2/3).float()
@@ -114,7 +120,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     return acc, l_i, m_i
 
 @triton.autotune(
-    configs=get_fwd_tune_config(),
+    configs=configs_A100["_attn_fwd"], #get_fwd_tune_config(),
     key=['N_CTX', 'HEAD_DIM'],
 )
 @triton.jit
@@ -305,7 +311,7 @@ def _attn_bwd_dq(dq, q, K, V, AFFINITY,  #
     return dq
 
 @triton.autotune(
-    configs=get_bwd_tune_config(),
+    configs=configs_A100["_attn_bwd"], #get_bwd_tune_config(),
     key=['HEAD_DIM', 'stride_z'], 
 )
 @triton.jit

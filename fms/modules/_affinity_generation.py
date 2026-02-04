@@ -3,21 +3,21 @@ from torch.autograd import Function
 import triton
 import triton.language as tl
 
-configs = [
-    triton.Config({'BLOCK_I': BLOCK_I, 'BLOCK_J': BLOCK_J}, num_stages=stages, num_warps=warps) \
-    for BLOCK_I in [16, 32, 64, 128]\
-    for BLOCK_J in [16, 32, 64, 128]\
-    for stages in [1, 2, 3]\
-    for warps in [2, 4, 8]\
-]
 
-# Optimal config tuned on A100
-#fwd_A100 = [triton.Config({'BLOCK_I': 64, 'BLOCK_J': 32}, num_stages=2, num_warps=4)]
-#bwd_A100 = [triton.Config({'BLOCK_I': 16, 'BLOCK_J': 32}, num_stages=2, num_warps=2)]
-#bwd_col_A100 = [triton.Config({'BLOCK_I': 32, 'BLOCK_J': 32}, num_stages=3, num_warps=2)]
-fwd_A100 = configs
-bwd_A100 = configs
-bwd_col_A100 = configs
+# configs = [
+#     triton.Config({'BLOCK_I': BLOCK_I, 'BLOCK_J': BLOCK_J}, num_stages=stages, num_warps=warps) \
+#     for BLOCK_I in [16, 32, 64, 128]\
+#     for BLOCK_J in [16, 32, 64, 128]\
+#     for stages in [1, 2, 3]\
+#     for warps in [2, 4, 8]\
+# ]
+
+# Optimal config for 1b model on A100 with fsdp
+configs_A100 = {
+    "_aff_fwd_kernel": [triton.Config({'BLOCK_I': 64, 'BLOCK_J': 32}, num_warps=4, num_stages=2)],
+    "_aff_bwd_kernel": [triton.Config({'BLOCK_I': 32, 'BLOCK_J': 16}, num_warps=2, num_stages=2)],
+    "_aff_bwd_col_kernel": [triton.Config({'BLOCK_I': 32, 'BLOCK_J': 32}, num_warps=2, num_stages=3)],
+}
 
 '''
 ######################################
@@ -25,7 +25,7 @@ bwd_col_A100 = configs
 ######################################
 '''
 @triton.autotune(
-    configs=fwd_A100,
+    configs=configs_A100["_aff_fwd_kernel"],
     key=['L', 'D'],
 )
 @triton.jit
@@ -138,7 +138,7 @@ def _affinity_fwd(k, src, dest):
 #######################################
 '''
 @triton.autotune(
-    configs=bwd_A100,
+    configs=configs_A100["_aff_bwd_kernel"],
     key=['L', 'D'],
 )
 @triton.jit
@@ -236,7 +236,7 @@ def _aff_bwd_kernel(
         dk_i_acc_1.cast(tl.bfloat16) * src_mat, mask=(offs_i[:, None] < L) & (offs_d_1[None, :] < D))
 
 @triton.autotune(
-    configs=bwd_col_A100,
+    configs=configs_A100["_aff_bwd_col_kernel"],
     key=['L', 'D'],
 )
 @triton.jit
