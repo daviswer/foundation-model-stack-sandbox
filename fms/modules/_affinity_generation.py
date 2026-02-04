@@ -12,11 +12,11 @@ configs = [
 ]
 
 # Optimal config tuned on A100
-#fwd_A100 = [triton.Config({'BLOCK_I': 32, 'BLOCK_J': 128}, num_stages=2, num_warps=4)]
+#fwd_A100 = [triton.Config({'BLOCK_I': 64, 'BLOCK_J': 32}, num_stages=2, num_warps=4)]
+#bwd_A100 = [triton.Config({'BLOCK_I': 16, 'BLOCK_J': 32}, num_stages=2, num_warps=2)]
+#bwd_col_A100 = [triton.Config({'BLOCK_I': 32, 'BLOCK_J': 32}, num_stages=3, num_warps=2)]
 fwd_A100 = configs
-#bwd_A100 = [triton.Config({'BLOCK_I': 32, 'BLOCK_J': 32}, num_stages=2, num_warps=2)]
 bwd_A100 = configs
-#bwd_col_A100 = [triton.Config({'BLOCK_I': 64, 'BLOCK_J': 32}, num_stages=2, num_warps=2)]
 bwd_col_A100 = configs
 
 '''
@@ -97,10 +97,10 @@ def _aff_fwd_kernel(
         # .masked_fill(mask.tril(-1), -1e12)
         affinity = tl.where((offs_i[:, None] > offs_j[None, :]), -1.0e8, affinity)
 
-        tl.store(aff_ptr + offs_i[:, None] * str_aff_li + offs_j[None, :] * str_aff_lj, 
-            affinity, mask=(offs_i[:, None] < L) & (offs_j[None, :] < L))
-        #tl.store(aff_ptr + offs_j[:, None] * str_aff_li + offs_i[None, :] * str_aff_lj, 
-        #            tl.trans(affinity), mask=(offs_j[:, None] < L) & (offs_i[None, :] < L))
+        #tl.store(aff_ptr + offs_i[:, None] * str_aff_li + offs_j[None, :] * str_aff_lj, 
+        #    affinity, mask=(offs_i[:, None] < L) & (offs_j[None, :] < L))
+        tl.store(aff_ptr + offs_j[:, None] * str_aff_li + offs_i[None, :] * str_aff_lj, 
+                    tl.trans(affinity), mask=(offs_j[:, None] < L) & (offs_i[None, :] < L))
 
 
 def _affinity_fwd(k, src, dest):
@@ -129,8 +129,8 @@ def _affinity_fwd(k, src, dest):
         B=b, H=h, L=l, D=d, BLOCK_D=d,
     )
 
-    return aff.transpose(-1, -2).to(k.dtype).contiguous()
-    #return aff
+    #return aff.transpose(-1, -2).to(k.dtype).contiguous()
+    return aff
 
 '''
 #######################################
