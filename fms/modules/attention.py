@@ -674,7 +674,7 @@ class MultiHeadAttention(nn.Module):
         affinity = torch.einsum('bnqh, bnkh -> bnqk', k*dest.sqrt().unsqueeze(-1), k*src.sqrt().unsqueeze(-1)).relu().float().pow(2/3)
         affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())
         affinity = affinity.tril(-1).cumsum(2).to(dtype=k.dtype)
-        affs = affinity[:,:,-1].exp().gt(.001).to(affs.dtype).mean()
+        affs = affinity[:,:,-1].exp().gt(.001).to(affinity.dtype).mean()
         affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).triu(1), float('-inf'))
         return affinity.repeat(1,r,1,1), affs
         
