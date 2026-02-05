@@ -46,7 +46,7 @@ def get_bwd_tune_config():
 # Optimal config for 1b model on A100 with fsdp
 configs_A100 = {
     "_attn_fwd": [triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32}, num_warps=8, num_stages=2)],
-    "_attn_bwd": [triton.Config({'BLOCK_M1': 64, 'BLOCK_M2': 64, 'BLOCK_N1': 64, 'BLOCK_N2': 64}, num_warps=8, num_stages=2)],
+    "_attn_bwd": [triton.Config({'BLOCK_M1': 32, 'BLOCK_M2': 32, 'BLOCK_N1': 32, 'BLOCK_N2': 32}, num_warps=8, num_stages=2)],
 }
 
 @torch.compile
