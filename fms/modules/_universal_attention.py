@@ -21,8 +21,8 @@ def get_fwd_tune_config():
                 for warp in [4, 8]:
                     configs.append(triton.Config({'BLOCK_M': M, 'BLOCK_N': N}, num_stages=stage,
                                     num_warps=warp))
-    #optimal_config = [triton.Config({'BLOCK_M': 128,'BLOCK_N': 32}, num_stages=3, num_warps=4)]
-    #configs = optimal_config
+    optimal_config = [triton.Config({'BLOCK_M': 128,'BLOCK_N': 32}, num_stages=2, num_warps=8)]
+    configs = optimal_config
     print(f'fwd config size: {len(configs)}')
     return configs
 
@@ -37,9 +37,9 @@ def get_bwd_tune_config():
                             if M2 % N2 == 0 and N1 % M1 == 0 and M2 == M1 and N2 == N1:
                                 configs.append(triton.Config({'BLOCK_M1': M1, 'BLOCK_M2': M2, 'BLOCK_N1': N1, 'BLOCK_N2': N2}, 
                                                 num_stages=stage, num_warps=warp))
-    #optimal_config = [triton.Config({'BLOCK_M1': 64, 'BLOCK_M2': 64, 'BLOCK_N1': 64, 'BLOCK_N2': 64}, 
-    #                                            num_stages=2, num_warps=8)]
-    #configs = optimal_config
+    optimal_config = [triton.Config({'BLOCK_M1': 32, 'BLOCK_M2': 32, 'BLOCK_N1': 32, 'BLOCK_N2': 32}, 
+                                                num_stages=2, num_warps=8)]
+    configs = optimal_config
     print(f'bwd config size: {len(configs)}')
     return configs
 
