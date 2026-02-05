@@ -139,22 +139,6 @@ class UniversalAttention(Function):
 
         return dkc,dvc,dxq,dstat_src,dstat_dest
 
-class PassThresh(Function):
-    @staticmethod
-    def forward(mask):
-        return mask[:,:,-1].gt(.001).view(mask.size(0),-1).sum(-1).to(dtype=mask.dtype).div(mask.size(1)*mask.size(3))
-    @staticmethod
-    def setup_context(ctx, inputs, output):
-        mask = inputs[0]
-        ctx.l = mask.size(1)
-        ctx.dim0 = mask.size(2)
-        ctx.dim1 = mask.size(3)
-    @staticmethod
-    def backward(ctx, g):
-        g = g / (ctx.l * ctx.dim0 * ctx.dim1)
-        return g[:,None,None,None].expand(g.size(0), ctx.l, ctx.dim0, ctx.dim1)
-pass_thresh = PassThresh.apply
-
 class SMVecMatMul(Function):
     @staticmethod
     def forward(mat, vec):
@@ -620,9 +604,7 @@ class MultiHeadAttention(nn.Module):
             rates = static_src
 
             r = self.nheads // self.kvheads
-            mask, mask_slim = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
-
-            aux = self._calc_aux(mask_slim)
+            mask, aux = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
 
             # affs = mask.view(batch_size, self.kvheads, -1, mask.size(-2), mask.size(-1))[:,:,0].exp()  # b h l l
             # affsm = affs.mean()
@@ -692,14 +674,9 @@ class MultiHeadAttention(nn.Module):
         affinity = torch.einsum('bnqh, bnkh -> bnqk', k*dest.sqrt().unsqueeze(-1), k*src.sqrt().unsqueeze(-1)).relu().float().pow(2/3)
         affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())
         affinity = affinity.tril(-1).cumsum(2).to(dtype=k.dtype)
-        mask = affinity.exp()
+        affs = affinity[:,:,-1].exp().gt(.001).to(affs.dtype).mean()
         affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).triu(1), float('-inf'))
-        return affinity.repeat(1,r,1,1), mask
-
-    @torch.compile
-    def _calc_aux(self, mask):
-        aux = pass_thresh(mask)
-        return aux
+        return affinity.repeat(1,r,1,1), affs
         
 
 
