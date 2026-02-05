@@ -34,8 +34,12 @@ from fms.modules.tp import TPModule
 
 from torch.autograd import Function
 
-from ._universal_attention import attention as UAOpt
 from ._affinity_generation import _gen_affinity_scores
+
+# Autograd function, works with FSDP's blockwise AC, no need for custom AC
+from ._universal_attention import attention as UAAG   
+# Custom Op, works with selective AC, utilize custom AC
+from .custom_ops import universal_attention_op as UAOpt     
 
 def get_attention_type():
     pass
@@ -488,7 +492,11 @@ class MultiHeadAttention(nn.Module):
         self.wstatic = nn.Linear(self.emb_dim, self.kvheads*2, bias=True)
         self.register_buffer("staticb", torch.empty(self.kvheads*2))
 
-        self.UA = UAOpt
+        self.custom_ac = True # Temporary manual knob, can be turned into config entry
+        if self.custom_ac:
+            self.UA = UAOpt
+        else:
+            self.UA = UAAG
         self._gen_affinity_scores = _gen_affinity_scores
         # self.SMVMM = SMVecMatMul.apply
 
@@ -623,8 +631,9 @@ class MultiHeadAttention(nn.Module):
             #)  # b h l d
 
             ## Option 2: Optimized multi-kernel implementation. ##
-            attn, affs = self.UA(queries, keys, values, True, 1.3, static_src, static_dest, True, False) ## The last flag toggles AC on/off. Turn to true if OOM is hit for additional memory savings.
-
+            ## The last flag toggles AC on/off. Turn to true if OOM is hit for additional memory savings.
+            attn, affs = self.UA(queries, keys, values, True, 1.3, static_src, static_dest, True, self.custom_ac) 
+            
             ## Baseline. ##
             #r = self.nheads // self.kvheads
             #affs = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k

@@ -1,7 +1,9 @@
 import torch
+import torch.nn.functional as F
+
 import triton
 import triton.language as tl
-import torch.nn.functional as F
+
 from ._affinity_generation import _affinity_bwd, _affinity_fwd
 
 def is_hip():
@@ -582,4 +584,175 @@ class _attention(torch.autograd.Function):
         dk += dk_new
         return dq[:, :, :, :ctx.HEAD_DIM], dk[:,:,:,:ctx.HEAD_DIM], dv[:,:,:,:ctx.HEAD_DIM], None, None, dsrc, ddest, None, None
 
-attention = _attention.apply
+attention = _attention.apply # torch.autograd.function
+
+class _attention_ac_op(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, q, k, v, causal, sm_scale, static_src=None, static_dest=None, warp_specialize=True, ac=False):
+        assert causal, 'currently, only support causal-autoregressive style generation only.'
+        #assert q.shape[2] > 0 and (q.shape[2] & (q.shape[2] - 1)) == 0, 'Currently only works for powers of 2. Trying to debug other paths. Masking is non-trivial'
+        assert q.shape[2] % 128 == 0, 'Only works for multiples of 128!'
+        # shape constraints
+        HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
+        # when v is in float8_e5m2 it is transposed.
+        HEAD_DIM_V = v.shape[-1]
+        assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
+        if HEAD_DIM_K not in {16, 32, 64, 128, 256}:
+            ## Then we zero-pad everything. ##
+            from math import ceil, log2
+            pow_two = int(ceil(log2(HEAD_DIM_K)))
+            assert 2**pow_two <= 256, 'Head hidden dim until 256 supported only!'
+            pad_amt = (2**pow_two)-HEAD_DIM_K
+            q = F.pad(q, (0, pad_amt), "constant", 0)
+            k = F.pad(k, (0, pad_amt), "constant", 0).requires_grad_(True)
+            v = F.pad(v, (0, pad_amt), "constant", 0)
+
+        assert q.shape[-1] in {16, 32, 64, 128, 256}, f'head_dim {q.shape[-1]} must be in [16, 32, 64, 128, 256]'
+        o = torch.empty_like(q)
+        stage = 3 if causal else 1
+        extra_kern_args = {}
+        # Tuning for AMD target
+        KV_H, Q_H = k.shape[1], q.shape[1]
+
+        M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32) ## (batch, head, sequence).
+        desc_q = q
+        desc_v = v
+        desc_k = k
+        desc_o = o
+
+        ## Here, we launch an affinity matrix calculation kernel to simplify implementation. ##
+        desc_affinity = _affinity_fwd(k, static_src, static_dest)
+
+        ## Specialize to this blk size for reasonable performance. ##
+        BLOCK_M=128
+        BLOCK_N=64
+        grid = lambda META: (triton.cdiv(q.shape[2], META['BLOCK_M']), q.shape[0] * q.shape[1], 1)
+        #grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
+
+        ctx.grid = grid
+        _attn_fwd[grid](
+            sm_scale, M,  #
+            q.shape[0], q.shape[1],  #
+            desc_q, desc_k, desc_v, desc_o, desc_affinity,  #
+            N_CTX=q.shape[2],  #
+            HEAD_DIM=q.shape[-1],  #
+            #BLOCK_M=BLOCK_M, # Comment out after debugging finishes.
+            #BLOCK_N=BLOCK_N, # Comment out after debugging finishes.
+            FP8_OUTPUT=False,
+            STAGE=stage,  #
+            warp_specialize=warp_specialize,  #
+            causal=causal,
+            KV_H=KV_H,
+            Q_H=Q_H,
+            #num_warps=4 if HEAD_DIM_Q <= 64 else 8,
+            #num_stages=4 if HEAD_DIM_Q <= 64 else 2,
+            **extra_kern_args)
+
+        # if not ac:
+        #     ctx.save_for_backward(q, k, v, o, M, static_src, static_dest, desc_affinity)
+        # else:
+        #     ctx.save_for_backward(q, k, v, o, M, static_src, static_dest)
+        if not ac:
+            ctx.save_for_backward(desc_affinity)
+        
+        ctx.q = q
+        ctx.k = k
+        ctx.v = v
+        ctx.o = o
+        ctx.M = M
+        ctx.static_src = static_src
+        ctx.static_dest = static_dest
+
+        ctx.sm_scale = sm_scale
+        ctx.HEAD_DIM = HEAD_DIM_K
+        ctx.causal = causal
+        ctx.ac = ac
+        return o[:, :, :, :HEAD_DIM_K], desc_affinity[:, :, -1, :].exp()
+
+    @staticmethod
+    def backward(ctx, do, dlastaff):
+        # if not ctx.ac:
+        #     q, k, v, o, M, static_src, static_dest, affinity = ctx.saved_tensors
+        # else:
+        #     q, k, v, o, M, static_src, static_dest = ctx.saved_tensors
+
+        q = ctx.q
+        k = ctx.k
+        v = ctx.v
+        o = ctx.o
+        M = ctx.M
+        static_src = ctx.static_src
+        static_dest = ctx.static_dest
+
+        do = do.contiguous()
+        assert do.is_contiguous()
+
+        ## Custom logic to zero-pad tensors. ##
+        HEAD_DIM_Q, HEAD_DIM_K, HEAD_DIM_V, HEAD_DIM_DO = q.shape[-1], k.shape[-1], v.shape[-1], do.shape[-1]
+        assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
+
+        ## Now, do may not be the same shape as everything else due to zero-padding.
+        ## So we accordingly adjust.
+        if do.stride() != q.stride():
+            assert q.shape[-1] >= do.shape[-1], 'Padding in fwd pass probably incorrect.'
+            pad_amt = q.shape[-1] - do.shape[-1]
+            do = F.pad(do, (0, pad_amt), "constant", 0)
+
+        ## Final check to see if everything is correct. ##
+        assert q.stride() == do.stride() == o.stride() and k.stride() == v.stride()
+
+        dq = torch.empty_like(q)
+        dk = torch.empty_like(k)
+        dv = torch.empty_like(v)
+        BATCH, N_HEAD, N_CTX = q.shape[:3]
+        PRE_BLOCK = 128
+        NUM_WARPS, NUM_STAGES = 4, 2
+        ## This is the original config that works. ##
+        #BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 64, 64, 32
+        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 32, 32, 32
+        BLK_SLICE_FACTOR = 2
+        PRE_BLOCK = 128
+        Q_H = N_HEAD // k.shape[1]
+        KV_H = k.shape[1]
+
+        ## We leverage streams for extra parallelism. Seems to help a little bit. ##
+        pre_grid = (triton.cdiv(N_CTX, PRE_BLOCK), BATCH * N_HEAD)
+        delta = torch.empty_like(M) ## (batch, qv_heads, N_CTX)
+        _attn_bwd_preprocess[pre_grid](
+            o, do,  #
+            delta,  #
+            BATCH, N_HEAD, N_CTX,  #
+            BLOCK_M=PRE_BLOCK, HEAD_DIM=do.shape[-1]  #
+        )
+
+        ## Recompute affinity scores. ##
+        if ctx.ac:
+            affinity = _affinity_fwd(k, static_src, static_dest)
+        else:
+            affinity = ctx.saved_tensors
+
+        daffinity = torch.zeros(affinity.shape[0], Q_H * KV_H, N_CTX, N_CTX, dtype=affinity.dtype, device=affinity.device)
+
+        grid = lambda META: (triton.cdiv(N_CTX, META['BLOCK_N1']), 1, BATCH * N_HEAD) 
+        #grid = (triton.cdiv(N_CTX, BLOCK_N1), 1, BATCH * N_HEAD)
+        scale = 1.0 / ctx.HEAD_DIM**0.5
+        _attn_bwd[grid](
+            q, k, v, affinity, scale, do, dq, dk, dv, daffinity,  #
+            M, delta,  #
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+            Q_H, KV_H, N_CTX,  #
+            #BLOCK_M1=BLOCK_M1, BLOCK_N1=BLOCK_N1,  #
+            #BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,  #
+            BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
+            HEAD_DIM=do.shape[-1],  #
+            causal=ctx.causal,
+            #num_warps=NUM_WARPS,  #
+            #num_stages=NUM_STAGES, #
+        )
+
+        daffinity = torch.reshape(daffinity, (daffinity.shape[0], Q_H, KV_H, daffinity.shape[2], daffinity.shape[3])).sum(1, keepdim=False)
+
+        dk_new, dsrc, ddest = _affinity_bwd(k, static_src, static_dest, daffinity)
+        dk += dk_new
+        return dq[:, :, :, :ctx.HEAD_DIM], dk[:,:,:,:ctx.HEAD_DIM], dv[:,:,:,:ctx.HEAD_DIM], None, None, dsrc, ddest, None, None
