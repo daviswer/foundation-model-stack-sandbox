@@ -551,7 +551,8 @@ class LLaMAHeadless(nn.Module):
                 if self.config.p_dropout:
                     dec_out = self.dropout(dec_out)
                 pred = head(dec_out)  # b 1 v
-                pred = pred.argmax(dim=-1)  # b 1
+                # pred = pred.argmax(dim=-1)  # b 1
+                pred = torch.multinomial(pred.squeeze(1).exp(), 1)  # b 1
                 out.append(pred)
                 d_in = pred
             if rank==0:
