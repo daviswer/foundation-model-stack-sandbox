@@ -608,8 +608,8 @@ class MultiHeadAttention(nn.Module):
             torch.backends.cuda.enable_math_sdp(False)
             attn = F.scaled_dot_product_attention(
                 queries, 
-                keys.repeat(1,r,1,1)
-                values.repeat(1,r,1,1)
+                keys.repeat(1,r,1,1),
+                values.repeat(1,r,1,1),
                 attn_mask=mask,
                 scale=1,
             )  # b h l d
