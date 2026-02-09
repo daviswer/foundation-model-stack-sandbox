@@ -448,6 +448,8 @@ class MultiHeadAttention(nn.Module):
         fused: bool = True,
         linear_config: Optional[Mapping[str, Any]] = None,
         scale_factor: Optional[float] = None,
+        prune_thresh: float = .001,
+        prune: bool = True,
     ):
         super(MultiHeadAttention, self).__init__()
         self.nheads = nheads
@@ -460,6 +462,9 @@ class MultiHeadAttention(nn.Module):
         self.fused = fused
         self.linear_config = linear_config
         self.scale_factor = scale_factor
+        
+        self.thresh = prune_thresh
+        self.prune = prune
 
         self.in_proj: QKV = (FusedQKV if self.fused else UnfusedQKV)(
             self.emb_dim,
@@ -674,10 +679,10 @@ class MultiHeadAttention(nn.Module):
         affinity = torch.einsum('bnqh, bnkh -> bnqk', k*dest.sqrt().unsqueeze(-1), k*src.sqrt().unsqueeze(-1)).relu().float().pow(2/3)
         affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())
         affinity = affinity.tril(-1).cumsum(2).to(dtype=k.dtype)
-        thresh = .001
-        affs = affinity[:,:,-1].exp().gt(thresh).to(affinity.dtype).mean()
+        affs = affinity[:,:,-1].exp().gt(self.thresh).to(affinity.dtype).mean()
         affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).triu(1), float('-inf'))
-        # affinity = affinity.masked_fill(affinity.lt(math.log(thresh)), float('-inf'))  # ACTUAL MASKING
+        if self.prune:
+            affinity = affinity.masked_fill(affinity.lt(math.log(self.thresh)), float('-inf'))  # ACTUAL MASKING
         return affinity.repeat(1,r,1,1), affs
         
 
