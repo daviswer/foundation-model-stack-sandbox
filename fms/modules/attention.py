@@ -475,6 +475,11 @@ class MultiHeadAttention(nn.Module):
             self.use_bias,
             linear_config=linear_config,
         )
+        self.gate_proj = nn.Sequential(
+            nn.Linear(self.emb_dim, self.emb_v_per_head, bias=False),
+            nn.Linear(self.emb_v_per_head, self.nheads*self.emb_v_per_head, bias=False),
+            nn.Sigmoid(),
+        )
 
         self.dense = nn.Linear(
             self.nheads * self.emb_v_per_head,
@@ -666,6 +671,7 @@ class MultiHeadAttention(nn.Module):
             # attn = attn[:,:q_len]
 
         attn = attn.view(batch_size, q_len, self.nheads * self.emb_v_per_head)
+        attn = self.gate_proj(q) * attn
         out = self.dense(attn)
 
         # if use_cache=True, we return the hidden_state as well as the kv cache
