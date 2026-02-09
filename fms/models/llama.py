@@ -58,7 +58,8 @@ class LLaMAConfig(ModelConfig):
     rope_partial: float = 1.0
     linear_config: Optional[Mapping[str, Any]] = None
     fused_weights: bool = True
-    sparsity: float = .1
+    prune_thresh: float = .001
+    prune: bool = True
 
 
 class LLaMABlock(nn.Module):
@@ -102,6 +103,8 @@ class LLaMABlock(nn.Module):
             position_encoder=rotary_emb,
             fused=self.config.fused_weights,
             linear_config=self.config.linear_config,
+            prune=self.config.prune,
+            prune_thresh=self.config.prune_thresh,
         )
         self.ff_sub_layer = GatedLinearUnit(
             self.config.emb_dim,
