@@ -677,7 +677,7 @@ class MultiHeadAttention(nn.Module):
         thresh = .001
         affs = affinity[:,:,-1].exp().gt(thresh).to(affinity.dtype).mean()
         affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).triu(1), float('-inf'))
-        affinity = affinity.masked_fill(affinity.lt(math.log(thresh)), float('-inf'))  # ACTUAL MASKING
+        # affinity = affinity.masked_fill(affinity.lt(math.log(thresh)), float('-inf'))  # ACTUAL MASKING
         return affinity.repeat(1,r,1,1), affs
         
 
