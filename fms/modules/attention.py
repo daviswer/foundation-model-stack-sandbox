@@ -551,7 +551,7 @@ class MultiHeadAttention(nn.Module):
         static = F.linear(q, self.wstatic.weight, self.staticb + self.wstatic.bias * math.sqrt(self.emb_dim))
         static = static.sigmoid().view(batch_size, q_len, 2, self.kvheads).permute(2,0,3,1)  # 2 b h l
         static_src = static[0]  # b h l
-        static_dest = torch.ones_like(static[1])  # b h l
+        static_dest = static[1]  # b h l
 
         # note: transposes will be moved in a later PR to fix dis-contiguous tensor issues
         queries = q_out.view(batch_size, q_len, self.nheads, self.emb_kq_per_head)
@@ -677,6 +677,7 @@ class MultiHeadAttention(nn.Module):
 
     @torch.compile
     def _gen_affinity_scores(self, k, src, dest, r):
+        k = torch.ones_like(k[:,:,:,:1])
         affinity = torch.einsum('bnqh, bnkh -> bnqk', k*dest.sqrt().unsqueeze(-1), k*src.sqrt().unsqueeze(-1)).relu().float()#.pow(2/3)
         affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())
         affinity = affinity.tril(-1).cumsum(2).to(dtype=k.dtype)
