@@ -506,7 +506,7 @@ class MultiHeadAttention(nn.Module):
         # nn.init.uniform_(self.wstatic.bias)
         self.wstatic.bias.data.zero_()
         staticb = torch.rand_like(self.staticb)
-        staticb[staticb.size(0)//2:] = 1-staticb[:staticb.size(0)]
+        staticb[staticb.size(0)//2:] = 1-staticb[:staticb.size(0)//2]
         self.staticb = staticb * (static_max - static_min) + static_min
 
     # def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
