@@ -505,7 +505,9 @@ class MultiHeadAttention(nn.Module):
         static_min = math.log(.001)
         # nn.init.uniform_(self.wstatic.bias)
         self.wstatic.bias.data.zero_()
-        self.staticb = torch.rand_like(self.staticb) * (static_max - static_min) + static_min
+        staticb = torch.rand_like(self.staticb)
+        staticb[staticb.size(0)//2:] = 1-staticb[:staticb.size(0)]
+        self.staticb = staticb * (static_max - static_min) + static_min
 
     # def to_tp(self, group: ProcessGroup) -> "TPMultiHeadAttention":
     #     return TPMultiHeadAttention.import_module(self, group)
@@ -548,7 +550,7 @@ class MultiHeadAttention(nn.Module):
         # b x h x kvlen x ds
         # todo: Cross attention (This always is true for now)
         q_out, k_out, v_out = self.in_proj(q, k, v)
-        static = F.linear(q, self.wstatic.weight, self.staticb + self.wstatic.bias * math.sqrt(self.emb_dim))
+        static = F.linear(q, self.wstatic.weight, self.staticb + self.wstatic.bias)
         static = static.sigmoid().view(batch_size, q_len, 2, self.kvheads).permute(2,0,3,1)  # 2 b h l
         static_src = static[0]  # b h l
         static_dest = static[1]  # b h l
