@@ -215,8 +215,6 @@ class MergeMLP(nn.Module):
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.trunc_normal_(m.weight, mean=0.0, std=0.02)
-                if self.use_bias:
-                    m.bias.data.zero_()
             elif isinstance(m, LayerNormParameterized):
                 m.reset_parameters()
     
