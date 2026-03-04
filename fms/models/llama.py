@@ -205,10 +205,11 @@ class MergeMLP(nn.Module):
     def __init__(self, width):
         super().__init__()
         self.in_proj = nn.Linear(width*2, width*2, False)
-        self.out_proj = nn.Linear(width*2, width, False)
+        self.out_proj = nn.Linear(width*2, width*2, False)
         self.act = nn.SiLU()
         self.n1 = LayerNormParameterized(width, elementwise_scale=False, elementwise_shift=False)
         self.n2 = LayerNormParameterized(width, elementwise_scale=False, elementwise_shift=False)
+        self.d = width
     
     def reset_parameters(self):
         for m in self.modules():
@@ -222,7 +223,9 @@ class MergeMLP(nn.Module):
     def forward(self, x, z):
         out = torch.cat([self.n1(x), self.n2(z)], dim=-1)
         out = self.out_proj(self.act(self.in_proj(out)))
-        return out
+        gate = out[...,:self.d].sigmoid()
+        out = out[...,self.d:]
+        return out, gate
 
 
 class LLaMABlock(nn.Module):
@@ -429,6 +432,7 @@ class LLaMAHeadless(nn.Module):
                 or isinstance(m, GatedMultiHeadAttention)
                 or isinstance(m, GatedLinearUnit)
                 or isinstance(m, LayerNormParameterized)
+                or isinstance(m, MergeMLP)
             ):
                 m.reset_parameters()
 
@@ -560,7 +564,7 @@ class LLaMAHeadless(nn.Module):
             d_in = self.embedding(dec)  # b 2n d
             # Grab only output from corrupted inputs
             enc_out = x_in
-            output = self.decoder[0](enc_out, d_in)
+            output, gate = self.decoder[0](enc_out, d_in)
             output, kv1 = self.decoder[1](output, enc_out, position_ids, use_cache=True, mask=dec_history_mask, cmask=dec_block_mask)
             present_key_value_states.append(list(kv1))  # Make list so we can massage it for inference
             output, kv2 = self.decoder[2](output, enc_out, position_ids, use_cache=True, mask=dec_history_mask, cmask=dec_block_mask)
@@ -568,10 +572,11 @@ class LLaMAHeadless(nn.Module):
 
             # Grab only the corrupted outputs
             dec_out = output[:,n:]
-            dec_out = self.dec_norm(dec_out)
+            gate = gate[:,n:]
+            enc_embed = x_in[:,n:]
+            dec_out = self.dec_norm(enc_embed*gate + (1-gate)*dec_out)
             if self.config.p_dropout:
                 dec_out = self.dropout(dec_out)
-            enc_embed = x_in[:,n:]
         
         else:
             head = cor
@@ -592,12 +597,12 @@ class LLaMAHeadless(nn.Module):
             kv2[1] = kv2[1][:,:,:n].view(b,kv2[1].size(1),n//chunksize,chunksize,-1).transpose(1,2).reshape(b*n//chunksize,kv2[1].size(1),chunksize,-1)
             for i in range(chunksize):
                 d_in = self.embedding(prior)
-                output = self.decoder[0](enc_out[:,i:i+1], d_in)
+                output, gate = self.decoder[0](enc_out[:,i:i+1], d_in)
                 output, kv1 = self.decoder[1](output, enc_out, pos+i, kpos, use_cache=True, past_key_value_state=kv1)
                 output, kv2 = self.decoder[2](output, enc_out, pos+i, kpos, use_cache=True, past_key_value_state=kv2)
 
                 dec_out = output
-                dec_out = self.dec_norm(dec_out)
+                dec_out = self.dec_norm(d_in*gate + (1-gate)*dec_out)
                 if self.config.p_dropout:
                     dec_out = self.dropout(dec_out)
                 pred = head(dec_out)  # bn 1 v
