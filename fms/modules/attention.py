@@ -35,6 +35,13 @@ from fms.modules.tp import TPModule
 
 from torch.autograd import Function
 
+from ._affinity_generation import _gen_affinity_scores
+
+# Autograd function, works with FSDP's blockwise AC, no need for custom AC
+from ._universal_attention import attention as UAAG   
+# Custom Op, works with selective AC, utilize custom AC
+from .custom_ops import universal_attention_op as UAOpt   
+
 def get_attention_type():
     pass
 
@@ -490,8 +497,14 @@ class MultiHeadAttention(nn.Module):
         self.wstatic = nn.Linear(self.emb_dim, self.kvheads*2, bias=True)
         self.register_buffer("staticb", torch.empty(self.kvheads*2, dtype=self.wstatic.bias.dtype))
 
-        self.UA = UniversalAttention.apply
-        self.SMVMM = SMVecMatMul.apply
+        # self.UA = UniversalAttention.apply
+        # self.SMVMM = SMVecMatMul.apply
+        self.custom_ac = True # Temporary manual knob, can be turned into config entry
+        if self.custom_ac:
+            self.UA = UAOpt
+        else:
+            self.UA = UAAG
+        self._gen_affinity_scores = _gen_affinity_scores
 
     def reset_parameters(self):
         for m in self.modules():
@@ -603,67 +616,16 @@ class MultiHeadAttention(nn.Module):
             
         else:
             # Blockwise universal attention
-            queries = queries.transpose(1,2)   # b hr l d
-            keys = keys.transpose(1,2)  # b h l d
-            values = values.transpose(1,2)  # b h l d
+            queries = queries.transpose(1,2).contiguous()   # b hr l d
+            keys = keys.transpose(1,2).contiguous()  # b h l d
+            values = values.transpose(1,2).contiguous()  # b h l d
             rates = static_src
 
-            r = self.nheads // self.kvheads
-            mask, aux = self._gen_affinity_scores(keys, static_src, static_dest, r)  # b h l_q l_k
-
-            # affs = mask.view(batch_size, self.kvheads, -1, mask.size(-2), mask.size(-1))[:,:,0].exp()  # b h l l
-            # affsm = affs.mean()
-            # with torch.no_grad():
-            #     aux = affs.gt(.001).to(dtype=affs.dtype).mean()  # *l*l / (l*(l+1)/2)  =  *2l/(l+1)
-            #     aux = aux * (2 * q_len / (q_len+1))
-            # aux = aux.sub(affsm.detach()).add(affsm)
-
-            torch.backends.cuda.enable_math_sdp(False)
-            attn = F.scaled_dot_product_attention(
-                queries, 
-                keys.repeat(1,r,1,1),
-                values.repeat(1,r,1,1),
-                attn_mask=mask,  # torch.repeat_interleave(mask,r,dim=1),
-                scale=1,
-            )  # b h l d
+            ## Option 2: Optimized multi-kernel implementation. ##
+            ## The last flag toggles AC on/off. Turn to true if OOM is hit for additional memory savings.
+            attn, _ = self.UA(queries, keys, values, True, 1.3, static_src, static_dest, True, self.custom_ac)
+            
             attn = attn.transpose(1,2).contiguous()  # b l h d
-
-            # c = 512
-            # b = batch_size
-            # # Right-pad k,v,src if len not divisible by chunksize
-            # if q_len % c != 0:
-            #     slack = c - q_len % c
-            #     queries = torch.cat([queries, torch.zeros(b, self.kvheads, self.nheads//self.kvheads, slack, self.emb_kq_per_head, 
-            #                                               device=queries.device, dtype=queries.dtype)], dim=-2)
-            #     keys = torch.cat([keys, torch.zeros(b, self.kvheads, slack, self.emb_kq_per_head, 
-            #                                               device=keys.device, dtype=keys.dtype)], dim=-2)
-            #     values = torch.cat([values, torch.zeros(b, self.kvheads, slack, self.emb_v_per_head, 
-            #                                               device=values.device, dtype=values.dtype)], dim=-2)
-            #     static_src = torch.cat([static_src, torch.zeros(b, self.kvheads, slack,
-            #                                                    device=static_src.device, dtype=static_src.dtype)], dim=-1)
-            #     static_dest = torch.cat([static_dest, torch.zeros(b, self.kvheads, slack,
-            #                                                    device=static_dest.device, dtype=static_dest.dtype)], dim=-1)
-
-            # # Chunk inputs
-            # l = static_src.size(2)
-            # n = l//c
-            # s = [b, self.kvheads, n, c, -1]
-            # kc = keys.view(*s)  # b h n c d
-            # vc = values.view(*s)
-            # static_src = static_src.view(b, self.kvheads, n, c)  # b h n c
-
-            # # Perform UA
-            # output, denom, affs = self.UA(kc, vc, queries, static_src, static_dest)
-
-            # # Weighted avg for final softmax
-            # output = self.SMVMM(output, denom)  # b h r l d
-            # attn = output.permute(0,3,1,2,4).reshape(b,l,-1)
-
-            # # Prune any right-padding
-            # keys = keys[:,:,:q_len]
-            # values = values[:,:,:q_len]
-            # affs = affs[:,:,:q_len]
-            # attn = attn[:,:q_len]
 
         attn = attn.view(batch_size, q_len, self.nheads * self.emb_v_per_head)
         attn = self.gate_proj(q) * attn
