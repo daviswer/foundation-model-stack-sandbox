@@ -623,7 +623,10 @@ class MultiHeadAttention(nn.Module):
 
             ## Option 2: Optimized multi-kernel implementation. ##
             ## The last flag toggles AC on/off. Turn to true if OOM is hit for additional memory savings.
-            attn, _ = self.UA(queries, keys, values, True, 1.3, static_src, static_dest, True, self.custom_ac)
+            attn, affs = self.UA(queries, keys, values, True, 1.3, static_src, static_dest, True, self.custom_ac)
+
+            comps = torch.tensor([.1,.01,.001], device=affs.device, dtype=affs.dtype).view(1,3,1)
+            aux = affs.view(batch_size, 1, -1).gt(comps).to(dtype=affs.dtype).mean(-1)  # b 3
             
             attn = attn.transpose(1,2).contiguous()  # b l h d
 
