@@ -404,7 +404,7 @@ class LLaMA(nn.Module):
         if use_cache:
             return preds, cache
         else:
-            x = min(cache)
+            x = sum(cache)/len(cache)
             return preds, x
 
 
