@@ -405,7 +405,6 @@ class LLaMA(nn.Module):
             return preds, cache
         else:
             x = sum(cache)/len(cache)
-            print(x)
             return preds, x
 
 
