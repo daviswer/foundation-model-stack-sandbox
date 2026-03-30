@@ -689,7 +689,7 @@ class MultiHeadAttention(nn.Module):
         affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).triu(1), float('-inf'))
         if self.prune:
             affinity = affinity.masked_fill(affinity.lt(math.log(self.thresh)), float('-inf'))  # ACTUAL MASKING
-        return affinity.repeat(1,r,1,1), affs
+        return affinity.repeat_interleave(1,r,1,1), affs
         
 
 
