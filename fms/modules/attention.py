@@ -686,11 +686,11 @@ class MultiHeadAttention(nn.Module):
         affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())
         affinity = affinity.tril(-1).cumsum(2).to(dtype=k.dtype)
         affs = affinity[:,:,-1].exp().gt(self.thresh).to(affinity.dtype)  # b n l
-        affs = affs.mean(-1).mean(0).min()
+        affs = affs.view(affs.size(0), -1).mean(1)
         affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).triu(1), float('-inf'))
         if self.prune:
             affinity = affinity.masked_fill(affinity.lt(math.log(self.thresh)), float('-inf'))  # ACTUAL MASKING
-        return affinity.repeat(1,r,1,1), affs
+        return affinity.repeat_interleave(r, dim=1), affs
         
 
 
