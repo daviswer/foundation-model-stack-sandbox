@@ -615,11 +615,11 @@ class MultiHeadAttention(nn.Module):
                 queries, 
                 keys.repeat(1,r,1,1),
                 values.repeat(1,r,1,1),
-                attn_mask=mask,
+                attn_mask=mask.repeat(1,r,1,1),
                 scale=1,
             )  # b h l d
             attn = attn.transpose(1,2).contiguous()  # b l h d
-            affs = mask.view(batch_size, self.kvheads, -1, mask.size(-2), mask.size(-1))[:,:,0,-1]
+            affs = mask.view(batch_size, self.kvheads, mask.size(-2), mask.size(-1))[:,:,-1]
 
             # c = 512
             # b = batch_size
@@ -666,7 +666,7 @@ class MultiHeadAttention(nn.Module):
         if use_cache:
             return out, (keys, values, rates, affs)
         else:
-            return out, mask.view(batch_size, self.kvheads, -1, q_len, q_len)[:,:,0].detach().bfloat16()
+            return out, mask.detach().bfloat16()
 
     # @torch.compile
     # def _gen_affinity_scores(self, k, src, dest, r):
@@ -682,7 +682,7 @@ class MultiHeadAttention(nn.Module):
         affinity = torch.log1p(affinity.clamp(min=0, max=1-1e-6).neg())
         affinity = affinity.tril(-1).cumsum(2).to(dtype=k.dtype)
         affinity = affinity.masked_fill(torch.ones_like(affinity, dtype=torch.bool).triu(1), float('-inf'))
-        return affinity.repeat(1,r,1,1)
+        return affinity
 
 
 
