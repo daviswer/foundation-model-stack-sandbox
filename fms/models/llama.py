@@ -369,7 +369,8 @@ class LLaMA(nn.Module):
 
             # if not use_cache, stick aux values into present_k_v_state
             x_in, present_key_value_state = output
-            present_key_value_states.append(present_key_value_state)
+            if present_key_value_state is not None:
+                present_key_value_states.append(present_key_value_state)
 
         dec_out = x_in
         dec_out = self.dec_norm(dec_out)
