@@ -704,7 +704,7 @@ class MultiHeadAttention(nn.Module):
         if use_cache:
             return out, (keys_return, values_return)
         else:
-            return out
+            return out, None
 
 
 class TPMultiHeadAttention(MultiHeadAttention, TPModule):
