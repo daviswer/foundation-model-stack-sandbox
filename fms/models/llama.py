@@ -17,6 +17,7 @@ from fms.modules.attention import (
     AttentionKwargs,
     MultiHeadAttention,
 )
+from fms.modules.basic_attention import MultiHeadAttention as BasicAttention
 from fms.modules.embedding import WordEmbedding
 from fms.modules.feedforward import GatedLinearUnit
 from fms.modules.layernorm import LayerNormParameterized
@@ -62,7 +63,7 @@ class LLaMAConfig(ModelConfig):
 
 
 class LLaMABlock(nn.Module):
-    def __init__(self, config: LLaMAConfig, rotary_emb: RotaryEmbedding):
+    def __init__(self, config: LLaMAConfig, rotary_emb: RotaryEmbedding, ind: int):
         super(LLaMABlock, self).__init__()
         self.config = config
         emb_kq = self.config.emb_dim // self.config.nheads
@@ -91,7 +92,8 @@ class LLaMABlock(nn.Module):
             kvheads = self.config.kvheads
             assert self.config.nheads % self.config.kvheads == 0
 
-        self.attn = MultiHeadAttention(
+        Attn = BasicAttention if ind%8==4 else MultiHeadAttention
+        self.attn = Attn(
             self.config.emb_dim,
             emb_kq,
             emb_v,
@@ -226,7 +228,7 @@ class LLaMA(nn.Module):
 
         layers = []
         for i in range(self.config.nlayers):
-            block: nn.Module = LLaMABlock(self.config, self.rot_emb)
+            block: nn.Module = LLaMABlock(self.config, self.rot_emb, i)
             block = self.distributed_strategy.distribute_layer(block, i)
             layers.append(block)
         self.layers = nn.ModuleList(layers)
@@ -258,6 +260,7 @@ class LLaMA(nn.Module):
         for m in self.modules():
             if (
                 isinstance(m, MultiHeadAttention)
+                or isinstance(m, BasicAttention)
                 or isinstance(m, WordEmbedding)
                 or isinstance(m, GatedLinearUnit)
                 or isinstance(m, LayerNormParameterized)
