@@ -147,9 +147,9 @@ class LLaMABlock(nn.Module):
             past_key_value_state=self_attn_past_key_value,
             use_cache=use_cache,
             **attn_kwargs,
+        ) if not self.is_mamba else (
+            self.attn(x), None
         )
-        if self.is_mamba:
-            x = (x, None)
         cache = None
         if use_cache:
             x, cache = x
