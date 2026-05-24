@@ -25,6 +25,8 @@ from fms.utils import serialization
 from fms.utils.activation import str_to_activation
 from fms.utils.config import ModelConfig
 
+from mamba-ssm.modules.mamba2 import Mamba2
+
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +64,12 @@ class LLaMAConfig(ModelConfig):
 
 
 class LLaMABlock(nn.Module):
-    def __init__(self, config: LLaMAConfig, rotary_emb: RotaryEmbedding):
+    def __init__(self, config: LLaMAConfig, rotary_emb: RotaryEmbedding, ind: int):
         super(LLaMABlock, self).__init__()
         self.config = config
         emb_kq = self.config.emb_dim // self.config.nheads
         emb_v = self.config.emb_dim // self.config.nheads
+        self.is_mamba = ind%2==0
 
         self.ln = LayerNormParameterized(
             self.config.emb_dim,
@@ -102,6 +105,8 @@ class LLaMABlock(nn.Module):
             position_encoder=rotary_emb,
             fused=self.config.fused_weights,
             linear_config=self.config.linear_config,
+        ) if not self.is_mamba else Mamba2(
+            self.config.emb_dim
         )
         self.ff_sub_layer = GatedLinearUnit(
             self.config.emb_dim,
@@ -143,6 +148,8 @@ class LLaMABlock(nn.Module):
             use_cache=use_cache,
             **attn_kwargs,
         )
+        if self.is_mamba:
+            x = (x, None)
         cache = None
         if use_cache:
             x, cache = x
