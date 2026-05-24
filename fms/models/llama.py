@@ -25,7 +25,7 @@ from fms.utils import serialization
 from fms.utils.activation import str_to_activation
 from fms.utils.config import ModelConfig
 
-from mamba-ssm.modules.mamba2 import Mamba2
+from mamba_ssm.modules.mamba2 import Mamba2
 
 
 logger = logging.getLogger(__name__)
